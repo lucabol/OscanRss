@@ -829,7 +829,18 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         child = nodes[child].next_sibling;
     };
 
-    // Block post-spacing
+    // Block post-spacing.
+    //
+    // The semantic here is "move y past the last rendered line + add
+    // element-specific margin". HR_LINE_H represents the line height,
+    // so every block must advance at LEAST HR_LINE_H after its children
+    // render — otherwise a wrapped inline line would stay on screen at
+    // the same y as the next block's first line.
+    //
+    // <p>, <h1>, <h2>, and the default already add HR_LINE_H. <li>,
+    // <pre>, <blockquote>, and the <h3+> group were under-advancing
+    // (only padding, no line-height), causing wrapped list items to
+    // overlap the next item.
     if is_block {
         x_ptr[0] = px + indent;
         if str_eq(tag, "p") {
@@ -837,13 +848,13 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         } else if str_eq(tag, "h1") or str_eq(tag, "h2") {
             y_ptr[0] = y_ptr[0] + HR_LINE_H;
         } else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
-            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+            y_ptr[0] = y_ptr[0] + HR_LINE_H + HR_LINE_H / 2;
         } else if str_eq(tag, "li") {
-            y_ptr[0] = y_ptr[0] + 2;
+            y_ptr[0] = y_ptr[0] + HR_LINE_H + 2;
         } else if str_eq(tag, "pre") {
-            y_ptr[0] = y_ptr[0] + 4;
+            y_ptr[0] = y_ptr[0] + HR_LINE_H + 4;
         } else if str_eq(tag, "blockquote") {
-            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+            y_ptr[0] = y_ptr[0] + HR_LINE_H + HR_LINE_H / 2;
         } else {
             y_ptr[0] = y_ptr[0] + HR_LINE_H;
         };
