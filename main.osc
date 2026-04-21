@@ -688,7 +688,8 @@ fn! main() {
                 };
             };
 
-            // Enter: expand/collapse group or select feed
+            // Enter: expand/collapse group (panel 0), or scroll content
+            // down when focused on post list (panel 1).
             if key == 13 {
                 if focus_panel == 0 and sel_group >= 0 {
                     for ge in 0..len(groups) {
@@ -698,7 +699,14 @@ fn! main() {
                             break;
                         };
                     };
+                } else if focus_panel == 1 {
+                    content_scroll = content_scroll + 14;
                 };
+            };
+
+            // Backspace on post list: scroll content up
+            if key == 8 and focus_panel == 1 {
+                content_scroll = max_i32(0, content_scroll - 14);
             };
 
             // 'a' = add
