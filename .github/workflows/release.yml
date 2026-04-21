@@ -10,14 +10,35 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Oscan
-        shell: pwsh
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $url = "https://github.com/lucabol/Oscan/releases/latest/download/oscan-windows-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile oscan.zip
-          Expand-Archive oscan.zip -DestinationPath oscan
-          echo "$PWD\oscan" | Out-File -Append -FilePath $env:GITHUB_PATH
+          set -euo pipefail
+          OSCAN_TAG=$(gh release view --repo lucabol/Oscan --json tagName --jq .tagName)
+          OSCAN_VER="${OSCAN_TAG#v}"
+          ARCHIVE="oscan-v${OSCAN_VER}-windows-x86_64-full.zip"
+          echo "Installing Oscan $OSCAN_TAG ($ARCHIVE)"
+
+          gh release download "$OSCAN_TAG" \
+            --repo lucabol/Oscan \
+            --pattern "$ARCHIVE" \
+            --dir /tmp/oscan-dl
+
+          cd /tmp/oscan-dl
+          unzip -q "$ARCHIVE"
+
+          OSCAN_BIN=$(find . -name oscan.exe -type f | head -1)
+          if [ -z "$OSCAN_BIN" ]; then
+            echo "ERROR: Could not find oscan.exe in archive"
+            find . -type f
+            exit 1
+          fi
+          OSCAN_DIR=$(dirname "$(realpath "$OSCAN_BIN")")
+          echo "$OSCAN_DIR" >> "$GITHUB_PATH"
+          echo "Oscan installed from $OSCAN_DIR"
       - name: Build
         shell: pwsh
         run: .\build.ps1
