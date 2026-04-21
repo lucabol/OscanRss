@@ -372,15 +372,17 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
     };
     cy += 10;
 
-    // Render HTML description
-    let desc_y: i32 = cy;
-    let desc_h: i32 = content_y + content_h - desc_y;
-    if desc_h > 0 and str_len(post.description) > 0 {
-        let desc_scroll: i32 = if content_scroll > header_h { content_scroll - header_h } else { 0 };
+    // Render HTML description.
+    // IMPORTANT: pass content_y (NOT desc_y) as panel_y so that min_y
+    // clipping inside html_render_content uses the TRUE content-viewport
+    // top. Otherwise text scrolled into the header region would bleed
+    // upward into the post list panel above.
+    if str_len(post.description) > 0 {
+        let html_scroll: i32 = content_scroll - header_h;
         let _total_h: i32 = html_render_content(post.description,
-                                                 panel_x, desc_y,
-                                                 panel_w, desc_h,
-                                                 desc_scroll,
+                                                 panel_x, content_y,
+                                                 panel_w, content_h,
+                                                 html_scroll,
                                                  content_links,
                                                  img_cache_idx, img_cache_data,
                                                  img_cache_w, img_cache_h,
