@@ -588,29 +588,55 @@ fn! main() {
             // Navigation
             if key == 106 or key == 107 { // j/k
                 if focus_panel == 0 {
-                    // Tree navigation (simplified: cycle groups)
-                    if key == 106 { // j = next
-                        let mut found: bool = false;
-                        for gn in 0..len(groups) {
-                            if found {
-                                sel_group = groups[gn].id;
-                                sel_feed = -1;
-                                sel_post = -1;
-                                break;
+                    // Tree navigation — walk linearly through visible
+                    // entries (groups and, if group expanded, feeds).
+                    // Entries are encoded as: group_id or 100000+feed_id.
+                    let mut entries: [i32] = [];
+                    for tgi in 0..len(groups) {
+                        push(entries, groups[tgi].id);
+                        if groups[tgi].expanded {
+                            for tfi in 0..len(feeds) {
+                                if feeds[tfi].group_id == groups[tgi].id {
+                                    push(entries, 100000 + feeds[tfi].id);
+                                };
                             };
-                            if groups[gn].id == sel_group { found = true; };
                         };
                     };
-                    if key == 107 { // k = prev
-                        let mut prev_gid: i32 = -1;
-                        for gp in 0..len(groups) {
-                            if groups[gp].id == sel_group and prev_gid >= 0 {
-                                sel_group = prev_gid;
-                                sel_feed = -1;
-                                sel_post = -1;
-                                break;
+                    // Find current selection index in entries
+                    let mut cur_idx: i32 = -1;
+                    let cur_token: i32 = if sel_feed >= 0 { 100000 + sel_feed } else { sel_group };
+                    for tei in 0..len(entries) {
+                        if entries[tei] == cur_token { cur_idx = tei; };
+                    };
+                    let mut new_idx: i32 = cur_idx;
+                    if key == 106 and cur_idx + 1 < len(entries) {
+                        new_idx = cur_idx + 1;
+                    };
+                    if key == 107 and cur_idx > 0 {
+                        new_idx = cur_idx - 1;
+                    };
+                    if key == 106 and cur_idx < 0 and len(entries) > 0 {
+                        new_idx = 0;
+                    };
+                    if new_idx >= 0 and new_idx < len(entries) and new_idx != cur_idx {
+                        let token: i32 = entries[new_idx];
+                        if token >= 100000 {
+                            // Feed entry
+                            let fid: i32 = token - 100000;
+                            sel_feed = fid;
+                            for tfl in 0..len(feeds) {
+                                if feeds[tfl].id == fid {
+                                    sel_group = feeds[tfl].group_id;
+                                };
                             };
-                            prev_gid = groups[gp].id;
+                            sel_post = -1;
+                            list_scroll = 0;
+                            content_scroll = 0;
+                        } else {
+                            // Group entry
+                            sel_group = token;
+                            sel_feed = -1;
+                            sel_post = -1;
                         };
                     };
                 } else if focus_panel == 1 {
@@ -628,6 +654,7 @@ fn! main() {
                         };
                         if next_post >= 0 {
                             sel_post = next_post;
+                            content_scroll = 0;
                             map_set(read_guids, posts[sel_post].guid, "1");
                             do_save_read(posts, read_guids);
                         };
@@ -644,9 +671,19 @@ fn! main() {
                         };
                         if prev_post >= 0 {
                             sel_post = prev_post;
+                            content_scroll = 0;
                             map_set(read_guids, posts[sel_post].guid, "1");
                             do_save_read(posts, read_guids);
                         };
+                    };
+                } else {
+                    // Content pane: j/k = scroll down/up
+                    let step: i32 = 14;
+                    if key == 106 { // j = down
+                        content_scroll = content_scroll + step;
+                    };
+                    if key == 107 { // k = up
+                        content_scroll = max_i32(0, content_scroll - step);
                     };
                 };
             };
