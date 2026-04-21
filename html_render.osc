@@ -647,7 +647,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
 
     // Paragraph spacing
     if str_eq(tag, "p") {
-        y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        y_ptr[0] = y_ptr[0] + HR_LINE_H;
     };
 
     // Bold/strong
@@ -809,7 +809,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
     if is_block {
         x_ptr[0] = px + indent;
         if str_eq(tag, "p") {
-            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+            y_ptr[0] = y_ptr[0] + HR_LINE_H;
         } else if str_eq(tag, "h1") or str_eq(tag, "h2") {
             y_ptr[0] = y_ptr[0] + HR_LINE_H;
         } else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
