@@ -621,12 +621,15 @@ fn! main() {
                     if new_idx >= 0 and new_idx < len(entries) and new_idx != cur_idx {
                         let token: i32 = entries[new_idx];
                         if token >= 100000 {
-                            // Feed entry
+                            // Feed entry — auto-refresh on selection
                             let fid: i32 = token - 100000;
                             sel_feed = fid;
                             for tfl in 0..len(feeds) {
                                 if feeds[tfl].id == fid {
                                     sel_group = feeds[tfl].group_id;
+                                    status_msg = "Loading {feeds[tfl].name}...";
+                                    fetch_feed_posts(feeds[tfl], posts, read_guids);
+                                    status_msg = "Loaded {feeds[tfl].name}";
                                 };
                             };
                             sel_post = -1;
@@ -839,12 +842,12 @@ fn! main() {
         let edit_clicked: bool = ui_button(btn_x + 122, btn_base_y, 50, BTN_H, "Edit", prev_btn);
         let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H, "Del", prev_btn);
 
-        // Refresh button in chrome
-        let refresh_clicked: bool = ui_button(w - 100, 4, 90, BTN_H, "Refresh", prev_btn);
-
-        // Filter toggle
-        let filter_text: str = if show_unread_only { "Show All" } else { "Unread" };
-        let filter_clicked: bool = ui_button(tree_w + panel_w - 80, CHROME_H + 2, 72, 18, filter_text, prev_btn);
+        // View-filter buttons in chrome: "All" and "Unread" toggle
+        // what the post list shows. The active one is prefixed with '*'.
+        let all_label: str = if show_unread_only { "All" } else { "*All" };
+        let unread_label: str = if show_unread_only { "*Unread" } else { "Unread" };
+        let all_clicked: bool = ui_button(w - 160, 4, 70, BTN_H, all_label, prev_btn);
+        let unread_clicked: bool = ui_button(w - 84, 4, 76, BTN_H, unread_label, prev_btn);
 
         // Handle button clicks (in Normal mode)
         if is_normal and not show_help {
@@ -882,15 +885,11 @@ fn! main() {
             if del_clicked and (sel_feed >= 0 or sel_group >= 0) {
                 mode = AppMode::Confirm;
             };
-            if refresh_clicked {
-                status_msg = "Refreshing all feeds...";
-                for ra2 in 0..len(feeds) {
-                    fetch_feed_posts(feeds[ra2], posts, read_guids);
-                };
-                status_msg = "All feeds refreshed";
+            if all_clicked {
+                show_unread_only = false;
             };
-            if filter_clicked {
-                show_unread_only = not show_unread_only;
+            if unread_clicked {
+                show_unread_only = true;
             };
         };
 
@@ -920,13 +919,17 @@ fn! main() {
                                                  panel_h - BTN_H - 10, prev_btn,
                                                  tree_w);
         if tree_click >= 20000 and is_normal {
-            // Clicked a feed
+            // Clicked a feed — select and auto-refresh so newly-arrived
+            // posts show without the user having to press Refresh.
             let fidx: i32 = tree_click - 20000;
             if fidx >= 0 and fidx < len(feeds) {
                 sel_feed = feeds[fidx].id;
                 sel_group = feeds[fidx].group_id;
                 sel_post = -1;
                 list_scroll = 0;
+                status_msg = "Loading {feeds[fidx].name}...";
+                fetch_feed_posts(feeds[fidx], posts, read_guids);
+                status_msg = "Loaded {feeds[fidx].name}";
             };
         } else if tree_click >= 10000 and is_normal {
             // Clicked a group
