@@ -174,11 +174,12 @@ fn! render_status(w: i32, h: i32, total_unread: i32, status_msg: str) {
 
 fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                       read_guids: map, sel_group: i32, sel_feed: i32,
-                      tree_scroll: i32, panel_h: i32, prev_btn: i32) -> i32 {
+                      tree_scroll: i32, panel_h: i32, prev_btn: i32,
+                      tree_w: i32) -> i32 {
     let px: i32 = 0;
     let py: i32 = CHROME_H;
-    gfx_fill_rect(px, py, TREE_W, panel_h, PANEL_BG);
-    gfx_line(TREE_W, py, TREE_W, py + panel_h, BORDER_COLOR);
+    gfx_fill_rect(px, py, tree_w, panel_h, PANEL_BG);
+    gfx_line(tree_w, py, tree_w, py + panel_h, BORDER_COLOR);
 
     let mut draw_y: i32 = py + 6 - tree_scroll;
     let mut clicked_type: i32 = -1; // -1 = none, 0..N = encoded
@@ -189,7 +190,7 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
         if gy >= py and gy < py + panel_h - ROW_H {
             // Highlight if selected
             if g.id == sel_group and sel_feed < 0 {
-                gfx_fill_rect(px, gy, TREE_W - 1, ROW_H, SELECT_BG);
+                gfx_fill_rect(px, gy, tree_w - 1, ROW_H, SELECT_BG);
             };
 
             // Expand/collapse arrow
@@ -211,7 +212,7 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
             let mx: i32 = canvas_mouse_x();
             let my: i32 = canvas_mouse_y();
             let mbtn: i32 = canvas_mouse_btn();
-            if ui_in_rect(mx, my, px, gy, TREE_W, ROW_H) and band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
+            if ui_in_rect(mx, my, px, gy, tree_w, ROW_H) and band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
                 clicked_type = 10000 + gi;
             };
         };
@@ -224,7 +225,7 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                     let fy: i32 = draw_y;
                     if fy >= py and fy < py + panel_h - ROW_H {
                         if feeds[fi3].id == sel_feed {
-                            gfx_fill_rect(px, fy, TREE_W - 1, ROW_H, SELECT_BG);
+                            gfx_fill_rect(px, fy, tree_w - 1, ROW_H, SELECT_BG);
                         };
 
                         gfx_draw_text(px + 24, fy + 4, "*", DIM_COLOR, 0);
@@ -240,7 +241,7 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                         let mx2: i32 = canvas_mouse_x();
                         let my2: i32 = canvas_mouse_y();
                         let mbtn2: i32 = canvas_mouse_btn();
-                        if ui_in_rect(mx2, my2, px, fy, TREE_W, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
+                        if ui_in_rect(mx2, my2, px, fy, tree_w, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
                             clicked_type = 20000 + fi3;
                         };
                     };
@@ -256,10 +257,10 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
 fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
                      read_guids: map, show_unread_only: bool,
                      list_scroll: i32, panel_x: i32, panel_w: i32,
-                     panel_h: i32, prev_btn: i32) -> i32 {
+                     panel_h: i32, prev_btn: i32, list_h: i32) -> i32 {
     let py: i32 = CHROME_H;
-    let max_y: i32 = py + POST_SPLIT;
-    gfx_fill_rect(panel_x, py, panel_w, POST_SPLIT, BG_COLOR);
+    let max_y: i32 = py + list_h;
+    gfx_fill_rect(panel_x, py, panel_w, list_h, BG_COLOR);
 
     // Header
     gfx_draw_text(panel_x + 8, py + 6, "Posts", TITLE_COLOR, 0);
@@ -312,7 +313,7 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
     };
 
     // Separator below post list
-    gfx_line(panel_x, py + POST_SPLIT, panel_x + panel_w, py + POST_SPLIT, BORDER_COLOR);
+    gfx_line(panel_x, py + list_h, panel_x + panel_w, py + list_h, BORDER_COLOR);
 
     clicked_post
 }
@@ -531,6 +532,12 @@ fn! main() {
     let mut img_cache_w: [i32] = [];
     let mut img_cache_h: [i32] = [];
 
+    // Resizable pane layout
+    let mut tree_w: i32 = TREE_W;
+    let mut list_h: i32 = POST_SPLIT;
+    let mut drag_v: bool = false; // dragging vertical splitter (tree_w)
+    let mut drag_h: bool = false; // dragging horizontal splitter (list_h)
+
     // Select first group if available
     if len(groups) > 0 {
         sel_group = groups[0].id;
@@ -548,10 +555,10 @@ fn! main() {
         let w: i32 = canvas_width();
         let h: i32 = canvas_height();
         let wheel: i32 = canvas_wheel();
-        let panel_w: i32 = w - TREE_W;
+        let panel_w: i32 = w - tree_w;
         let panel_h: i32 = h - CHROME_H - STATUS_H;
-        let content_y: i32 = CHROME_H + POST_SPLIT;
-        let content_h: i32 = h - CHROME_H - POST_SPLIT - STATUS_H;
+        let content_y: i32 = CHROME_H + list_h;
+        let content_h: i32 = h - CHROME_H - list_h - STATUS_H;
 
         // ─── Input handling (outside rendering) ──────────
 
@@ -790,7 +797,7 @@ fn! main() {
 
         // Filter toggle
         let filter_text: str = if show_unread_only { "Show All" } else { "Unread" };
-        let filter_clicked: bool = ui_button(TREE_W + panel_w - 80, CHROME_H + 2, 72, 18, filter_text, prev_btn);
+        let filter_clicked: bool = ui_button(tree_w + panel_w - 80, CHROME_H + 2, 72, 18, filter_text, prev_btn);
 
         // Handle button clicks (in Normal mode)
         if is_normal and not show_help {
@@ -843,7 +850,8 @@ fn! main() {
         // Tree panel
         let tree_click: i32 = render_tree_panel(groups, feeds, posts, read_guids,
                                                  sel_group, sel_feed, tree_scroll,
-                                                 panel_h - BTN_H - 10, prev_btn);
+                                                 panel_h - BTN_H - 10, prev_btn,
+                                                 tree_w);
         if tree_click >= 20000 and is_normal {
             // Clicked a feed
             let fidx: i32 = tree_click - 20000;
@@ -871,8 +879,8 @@ fn! main() {
         if sel_feed >= 0 {
             let post_click: i32 = render_post_list(posts, sel_feed, sel_post,
                                                     read_guids, show_unread_only,
-                                                    list_scroll, TREE_W, panel_w,
-                                                    panel_h, prev_btn);
+                                                    list_scroll, tree_w, panel_w,
+                                                    panel_h, prev_btn, list_h);
             if post_click >= 0 and is_normal {
                 sel_post = post_click;
                 content_scroll = 0;
@@ -882,13 +890,13 @@ fn! main() {
                 do_save_read(posts, read_guids);
             };
         } else {
-            gfx_fill_rect(TREE_W, CHROME_H, panel_w, panel_h, BG_COLOR);
-            gfx_draw_text(TREE_W + 20, CHROME_H + 40, "Select a feed to view posts", DIM_COLOR, 0);
+            gfx_fill_rect(tree_w, CHROME_H, panel_w, panel_h, BG_COLOR);
+            gfx_draw_text(tree_w + 20, CHROME_H + 40, "Select a feed to view posts", DIM_COLOR, 0);
         };
 
         // Post content
         if sel_feed >= 0 {
-            render_post_content(posts, sel_post, TREE_W, panel_w,
+            render_post_content(posts, sel_post, tree_w, panel_w,
                                content_y, content_h, content_scroll,
                                content_links,
                                img_cache_idx, img_cache_data,
@@ -1090,6 +1098,58 @@ fn! main() {
         // Help overlay
         if show_help {
             render_help(w, h);
+        };
+
+        // ─── Splitter handles (drag to resize panes) ─────
+        // Vertical splitter at x = tree_w: drag to resize left tree panel
+        // Horizontal splitter at y = CHROME_H + list_h: drag to resize post list (only when a feed is selected)
+        {
+            let smx: i32 = canvas_mouse_x();
+            let smy: i32 = canvas_mouse_y();
+            let sbtn: i32 = canvas_mouse_btn();
+            let pressed: bool = band(sbtn, 1) == 1 and band(prev_btn, 1) == 0;
+            let released: bool = band(sbtn, 1) == 0;
+            let held: bool = band(sbtn, 1) == 1;
+
+            let v_x: i32 = tree_w;
+            let v_y0: i32 = CHROME_H;
+            let v_y1: i32 = h - STATUS_H;
+            let v_hover: bool = smx >= v_x - 3 and smx <= v_x + 3 and smy >= v_y0 and smy < v_y1;
+
+            let h_x0: i32 = tree_w;
+            let h_x1: i32 = w;
+            let h_y: i32 = CHROME_H + list_h;
+            let h_hover: bool = sel_feed >= 0 and smy >= h_y - 3 and smy <= h_y + 3 and smx >= h_x0 and smx < h_x1;
+
+            if pressed and is_normal {
+                if v_hover and not h_hover { drag_v = true; };
+                if h_hover and not v_hover { drag_h = true; };
+            };
+            if released {
+                drag_v = false;
+                drag_h = false;
+            };
+
+            if drag_v and held {
+                tree_w = smx;
+                if tree_w < 150 { tree_w = 150; };
+                if tree_w > w - 250 { tree_w = w - 250; };
+            };
+            if drag_h and held {
+                list_h = smy - CHROME_H;
+                let min_list: i32 = 80;
+                let max_list: i32 = h - CHROME_H - STATUS_H - 120;
+                if list_h < min_list { list_h = min_list; };
+                if list_h > max_list { list_h = max_list; };
+            };
+
+            // Highlight splitter handles on hover/drag (subtle accent)
+            let v_color: i32 = if v_hover or drag_v { LINK_COLOR } else { BORDER_COLOR };
+            gfx_fill_rect(v_x - 1, v_y0, 3, v_y1 - v_y0, v_color);
+            if sel_feed >= 0 {
+                let hc: i32 = if h_hover or drag_h { LINK_COLOR } else { BORDER_COLOR };
+                gfx_fill_rect(h_x0, h_y - 1, h_x1 - h_x0, 3, hc);
+            };
         };
 
         // Update prev_btn
