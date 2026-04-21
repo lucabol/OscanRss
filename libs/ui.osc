@@ -1,0 +1,113 @@
+// ui.osc — Reusable UI widget library for Oscan
+// Provides panel, label, separator, button, checkbox, slider, and textbox widgets.
+
+let UI_BG: i32 = 45 * 65536 + 45 * 256 + 48;
+let UI_BG_HOVER: i32 = 62 * 65536 + 62 * 256 + 66;
+let UI_BG_ACTIVE: i32 = 37 * 65536 + 37 * 256 + 38;
+let UI_FG: i32 = 220 * 65536 + 220 * 256 + 220;
+let UI_FG_DIM: i32 = 150 * 65536 + 150 * 256 + 150;
+let UI_BORDER: i32 = 80 * 65536 + 80 * 256 + 85;
+let UI_ACCENT: i32 = 0 * 65536 + 122 * 256 + 204;
+
+fn ui_in_rect(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
+    mx >= x and mx < x + w and my >= y and my < y + h
+}
+
+fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
+    gfx_fill_rect(x, y, w, h, UI_BG);
+    gfx_rect(x, y, w, h, UI_BORDER);
+}
+
+fn! ui_label(x: i32, y: i32, text: str) {
+    gfx_draw_text(x, y, text, UI_FG, 0);
+}
+
+fn! ui_label_color(x: i32, y: i32, text: str, color: i32) {
+    gfx_draw_text(x, y, text, color, 0);
+}
+
+fn! ui_separator(x: i32, y: i32, w: i32) {
+    gfx_line(x, y, x + w, y, UI_BORDER);
+}
+
+fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool {
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, w, h);
+    let pressed: bool = hover and band(btn, 1) == 1;
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    let bg: i32 = if pressed { UI_BG_ACTIVE }
+                  else if hover { UI_BG_HOVER }
+                  else { UI_BG };
+
+    gfx_fill_rect(x, y, w, h, bg);
+    gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
+
+    let text_w: i32 = str_len(label) * 8;
+    let tx: i32 = x + (w - text_w) / 2;
+    let ty: i32 = y + (h - 8) / 2;
+    gfx_draw_text(tx, ty, label, UI_FG, 0);
+
+    clicked
+}
+
+fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> bool {
+    let box_size: i32 = 12;
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, box_size, box_size);
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    let bg: i32 = if hover { UI_BG_HOVER } else { UI_BG };
+    gfx_fill_rect(x, y, box_size, box_size, bg);
+    gfx_rect(x, y, box_size, box_size, if hover { UI_ACCENT } else { UI_BORDER });
+
+    if checked {
+        gfx_line(x + 2, y + 6, x + 5, y + 9, UI_ACCENT);
+        gfx_line(x + 5, y + 9, x + 10, y + 2, UI_ACCENT);
+    };
+
+    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG, 0);
+
+    if clicked { not checked } else { checked }
+}
+
+fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32) -> bool {
+    let h: i32 = 20;
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, w, h);
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+    let clicked_outside: bool = not hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    let bg: i32 = if focused { UI_BG_ACTIVE } else { UI_BG };
+    gfx_fill_rect(x, y, w, h, bg);
+    gfx_rect(x, y, w, h, if focused { UI_ACCENT } else { UI_BORDER });
+
+    if focused {
+        if key >= 32 and key <= 126 {
+            push(buf, key);
+        };
+        if key == 8 and len(buf) > 0 {
+            pop(buf);
+        };
+    };
+
+    let text: str = str_from_chars(buf);
+    let pad: i32 = 4;
+    let text_y: i32 = y + (h - 8) / 2;
+    gfx_draw_text(x + pad, text_y, text, UI_FG, 0);
+
+    if focused {
+        let cursor_x: i32 = x + pad + len(buf) * 8;
+        gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
+    };
+
+    if clicked { true }
+    else if clicked_outside { false }
+    else { focused }
+}

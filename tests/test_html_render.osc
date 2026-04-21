@@ -1,0 +1,112 @@
+// Test HTML renderer for OscanRss
+
+use "../url.osc"
+use "../http.osc"
+use "../html_render.osc"
+
+fn! assert_eq_str(label: str, expected: str, actual: str) {
+    if str_eq(expected, actual) {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected='{expected}' got='{actual}'");
+    };
+}
+
+fn! assert_eq_i32(label: str, expected: i32, actual: i32) {
+    if expected == actual {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected={expected} got={actual}");
+    };
+}
+
+fn! assert_true(label: str, val: bool) {
+    if val {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected true");
+    };
+}
+
+fn! main() {
+    println("=== HTML Renderer Tests ===");
+
+    // Test entity decoding
+    let e1: str = html_entity_decode("hello &amp; world");
+    assert_eq_str("entity_amp", "hello & world", e1);
+
+    let e2: str = html_entity_decode("&lt;b&gt;");
+    assert_eq_str("entity_lt_gt", "<b>", e2);
+
+    let e3: str = html_entity_decode("&#65;&#66;");
+    assert_eq_str("entity_numeric", "AB", e3);
+
+    // Test HTML parsing - basic structure
+    let mut nodes1: [HtmlNode] = [];
+    let r1: i32 = html_parse(nodes1, "<p>Hello <b>world</b></p>");
+    assert_true("parse_returns_root", r1 >= 0);
+    assert_true("parse_creates_nodes", len(nodes1) > 1);
+
+    // Check root node
+    assert_eq_str("root_tag", "root", nodes1[r1].tag);
+    assert_true("root_has_child", nodes1[r1].first_child >= 0);
+
+    // Check text extraction (may have extra spaces from DOM structure)
+    let text1: str = html_get_text_content(nodes1, r1);
+    assert_true("text_has_hello", str_contains(text1, "Hello"));
+    assert_true("text_has_world", str_contains(text1, "world"));
+
+    // Test parsing with multiple tags
+    let mut nodes2: [HtmlNode] = [];
+    let r2: i32 = html_parse(nodes2, "<h1>Title</h1><p>First paragraph.</p><p>Second <em>paragraph</em>.</p>");
+    let text2: str = html_get_text_content(nodes2, r2);
+    assert_true("multi_tag_text", str_contains(text2, "Title"));
+    assert_true("multi_tag_text2", str_contains(text2, "First"));
+    assert_true("multi_tag_text3", str_contains(text2, "paragraph"));
+
+    // Test parsing with links
+    let mut nodes3: [HtmlNode] = [];
+    let r3: i32 = html_parse(nodes3, "<a href=\"http://example.com\">Click here</a>");
+    let text3: str = html_get_text_content(nodes3, r3);
+    assert_eq_str("link_text", "Click here", text3);
+
+    // Test get attribute
+    // Find the <a> node
+    let mut found_a: bool = false;
+    for na in 0..len(nodes3) {
+        if str_eq(nodes3[na].tag, "a") {
+            let href: str = html_get_attr(nodes3[na], "href");
+            assert_eq_str("link_href", "http://example.com", href);
+            found_a = true;
+        };
+    };
+    assert_true("found_a_tag", found_a);
+
+    // Test parsing with list
+    let mut nodes4: [HtmlNode] = [];
+    let r4: i32 = html_parse(nodes4, "<ul><li>Item 1</li><li>Item 2</li><li>Item 3</li></ul>");
+    let text4: str = html_get_text_content(nodes4, r4);
+    assert_true("list_item1", str_contains(text4, "Item 1"));
+    assert_true("list_item2", str_contains(text4, "Item 2"));
+    assert_true("list_item3", str_contains(text4, "Item 3"));
+
+    // Test void elements (self-closing)
+    let mut nodes5: [HtmlNode] = [];
+    let r5: i32 = html_parse(nodes5, "Line 1<br>Line 2<hr>Done");
+    let text5: str = html_get_text_content(nodes5, r5);
+    assert_true("void_br", str_contains(text5, "Line 1"));
+    assert_true("void_hr", str_contains(text5, "Done"));
+
+    // Test script/style stripping
+    let mut nodes6: [HtmlNode] = [];
+    let r6: i32 = html_parse(nodes6, "<p>Visible</p><script>var x = 1;</script><p>Also visible</p>");
+    let text6: str = html_get_text_content(nodes6, r6);
+    assert_true("script_strip_visible", str_contains(text6, "Visible"));
+    assert_true("script_strip_also", str_contains(text6, "Also visible"));
+
+    // Test normalize whitespace
+    let n1: str = hr_normalize("  hello   world  \n  foo  ");
+    assert_eq_str("normalize_ws", "hello world foo ", n1);
+
+    println("=== Tests Complete ===");
+}

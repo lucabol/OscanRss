@@ -1,0 +1,263 @@
+// HTTP client module for OscanRss
+// Adapted from OscanWeb (github.com/lucabol/oscanweb)
+
+use "url.osc"
+
+struct HttpResponse {
+    status_code: i32,
+    content_type: str,
+    body: str,
+    redirect_url: str,
+    error: str,
+    ok: bool,
+}
+
+fn! http_make_error(msg: str) -> HttpResponse {
+    HttpResponse {
+        status_code: 0,
+        content_type: "",
+        body: "",
+        redirect_url: "",
+        error: msg,
+        ok: false,
+    }
+}
+
+fn! http_parse_headers(header_block: str) -> map {
+    let m: map = map_new();
+    let lines: [str] = str_split(header_block, "\r\n");
+    for li in 0..len(lines) {
+        let line: str = lines[li];
+        let colon_pos: i32 = str_find(line, ": ");
+        if colon_pos > 0 {
+            let key: str = str_to_lower(str_slice(line, 0, colon_pos));
+            let value: str = str_slice(line, colon_pos + 2, str_len(line));
+            map_set(m, key, value);
+        };
+    };
+    m
+}
+
+fn! http_get_tls(host: str, port: i32, request: str) -> HttpResponse {
+    let conn_result: Result<i32, str> = tls_connect(host, port);
+    let mut handle: i32 = 0;
+    match conn_result {
+        Result::Ok(h) => { handle = h; },
+        Result::Err(e) => { return http_make_error("TLS connection failed: {e}"); },
+    };
+    defer tls_close(handle);
+
+    let send_result: Result<i32, str> = tls_send(handle, request);
+    match send_result {
+        Result::Ok(_n) => {},
+        Result::Err(e) => { return http_make_error("TLS send failed: {e}"); },
+    };
+
+    let mut raw_response: str = "";
+    let mut headers_done: bool = false;
+    let mut content_length: i32 = -1;
+    let mut body_start: i32 = 0;
+    let mut done: bool = false;
+
+    while not done {
+        let chunk: str = tls_recv(handle, 8192);
+        let chunk_len: i32 = str_len(chunk);
+
+        if chunk_len == 0 {
+            done = true;
+        } else {
+            raw_response = str_concat(raw_response, chunk);
+
+            if not headers_done {
+                let sep: i32 = str_find(raw_response, "\r\n\r\n");
+                if sep >= 0 {
+                    headers_done = true;
+                    body_start = sep + 4;
+                    let header_block: str = str_to_lower(str_slice(raw_response, 0, sep));
+                    let cl_pos: i32 = str_find(header_block, "content-length: ");
+                    if cl_pos >= 0 {
+                        let after_cl: str = str_slice(header_block, cl_pos + 16, str_len(header_block));
+                        let cl_end: i32 = str_find(after_cl, "\r\n");
+                        let mut cl_str: str = after_cl;
+                        if cl_end >= 0 {
+                            cl_str = str_slice(after_cl, 0, cl_end);
+                        };
+                        let cl_result: Result<i32, str> = parse_i32(str_trim(cl_str));
+                        match cl_result {
+                            Result::Ok(cl) => { content_length = cl; },
+                            Result::Err(_e2) => {},
+                        };
+                    };
+                };
+            };
+
+            if headers_done and content_length >= 0 {
+                let body_received: i32 = str_len(raw_response) - body_start;
+                if body_received >= content_length {
+                    done = true;
+                };
+            };
+        };
+    };
+
+    HttpResponse {
+        status_code: 200,
+        content_type: "",
+        body: raw_response,
+        redirect_url: "",
+        error: "",
+        ok: true,
+    }
+}
+
+fn! http_get_plain(host: str, port: i32, request: str) -> HttpResponse {
+    let sock_result: Result<i32, str> = socket_tcp();
+    let mut sock: i32 = 0;
+    match sock_result {
+        Result::Ok(s) => { sock = s; },
+        Result::Err(e) => { return http_make_error("Socket creation failed: {e}"); },
+    };
+    defer socket_close(sock);
+
+    let conn_result: Result<str, str> = socket_connect(sock, host, port);
+    match conn_result {
+        Result::Ok(_s) => {},
+        Result::Err(e) => { return http_make_error("Connection failed: {e}"); },
+    };
+
+    let send_result: Result<i32, str> = socket_send(sock, request);
+    match send_result {
+        Result::Ok(_n) => {},
+        Result::Err(e) => { return http_make_error("Send failed: {e}"); },
+    };
+
+    let mut raw_response: str = "";
+    let mut recv_done: bool = false;
+    while not recv_done {
+        let chunk: str = socket_recv(sock, 8192);
+        let chunk_len: i32 = str_len(chunk);
+        if chunk_len == 0 {
+            recv_done = true;
+        } else {
+            raw_response = str_concat(raw_response, chunk);
+        };
+    };
+
+    HttpResponse {
+        status_code: 200,
+        content_type: "",
+        body: raw_response,
+        redirect_url: "",
+        error: "",
+        ok: true,
+    }
+}
+
+fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: OscanRss/0.1\r\nAccept: application/rss+xml,application/xml,text/xml,*/*;q=0.8\r\n\r\n";
+
+    let mut raw_response: str = "";
+
+    if use_tls {
+        let tls_resp: HttpResponse = http_get_tls(host, port, request);
+        if str_len(tls_resp.error) > 0 {
+            return tls_resp;
+        };
+        raw_response = tls_resp.body;
+    } else {
+        let plain_resp: HttpResponse = http_get_plain(host, port, request);
+        if str_len(plain_resp.error) > 0 {
+            return plain_resp;
+        };
+        raw_response = plain_resp.body;
+    };
+
+    if str_len(raw_response) == 0 {
+        return http_make_error("Empty response");
+    };
+
+    // Split headers from body
+    let sep_pos: i32 = str_find(raw_response, "\r\n\r\n");
+    let mut header_section: str = raw_response;
+    let mut body: str = "";
+    if sep_pos >= 0 {
+        header_section = str_slice(raw_response, 0, sep_pos);
+        body = str_slice(raw_response, sep_pos + 4, str_len(raw_response));
+    };
+
+    // Parse status line
+    let first_line_end: i32 = str_find(header_section, "\r\n");
+    let mut status_line: str = header_section;
+    let mut rest_headers: str = "";
+    if first_line_end >= 0 {
+        status_line = str_slice(header_section, 0, first_line_end);
+        rest_headers = str_slice(header_section, first_line_end + 2, str_len(header_section));
+    };
+
+    // Extract status code
+    let mut status_code: i32 = 0;
+    let first_space: i32 = str_find(status_line, " ");
+    if first_space >= 0 {
+        let after_version: str = str_slice(status_line, first_space + 1, str_len(status_line));
+        let second_space: i32 = str_find(after_version, " ");
+        let mut code_str: str = after_version;
+        if second_space >= 0 {
+            code_str = str_slice(after_version, 0, second_space);
+        };
+        let code_result: Result<i32, str> = parse_i32(code_str);
+        match code_result {
+            Result::Ok(c) => { status_code = c; },
+            Result::Err(_e3) => { status_code = 0; },
+        };
+    };
+
+    let headers: map = http_parse_headers(rest_headers);
+
+    let mut content_type: str = "";
+    if map_has(headers, "content-type") {
+        content_type = map_get(headers, "content-type");
+    };
+
+    let mut redirect_url: str = "";
+    if status_code == 301 or status_code == 302 or status_code == 307 {
+        if map_has(headers, "location") {
+            redirect_url = map_get(headers, "location");
+        };
+    };
+
+    let is_ok: bool = status_code >= 200 and status_code < 300;
+
+    HttpResponse {
+        status_code: status_code,
+        content_type: content_type,
+        body: body,
+        redirect_url: redirect_url,
+        error: "",
+        ok: is_ok,
+    }
+}
+
+fn! http_fetch_url(feed_url: str, redirects_left: i32) -> HttpResponse {
+    if redirects_left <= 0 {
+        return http_make_error("Too many redirects");
+    };
+
+    let u: Url = url_parse(feed_url);
+    let use_tls: bool = str_eq(u.scheme, "https");
+    let response: HttpResponse = http_get(u.host, u.port, u.path, use_tls);
+
+    if str_len(response.error) > 0 {
+        return response;
+    };
+
+    if str_len(response.redirect_url) > 0 {
+        let mut redir: str = response.redirect_url;
+        // Handle relative redirects
+        if str_starts_with(redir, "/") {
+            redir = "{u.scheme}://{u.host}{redir}";
+        };
+        return http_fetch_url(redir, redirects_left - 1);
+    };
+
+    response
+}

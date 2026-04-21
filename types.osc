@@ -1,0 +1,32 @@
+// Shared data types for OscanRss
+
+struct FeedGroup {
+    id: i32,
+    name: str,
+    expanded: bool,
+}
+
+struct Feed {
+    id: i32,
+    group_id: i32,
+    name: str,
+    url: str,
+}
+
+struct Post {
+    feed_id: i32,
+    title: str,
+    link: str,
+    description: str,
+    pub_date: str,
+    guid: str,
+}
+
+enum AppMode {
+    Normal,
+    AddGroup,
+    AddFeed,
+    EditGroup,
+    EditFeed,
+    Confirm,
+}

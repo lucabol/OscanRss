@@ -1,0 +1,1103 @@
+// OscanRss — A Feedly-style RSS feed reader
+// Written in Oscan. GUI via built-in canvas.
+
+use "types.osc"
+use "url.osc"
+use "http.osc"
+use "rss_parse.osc"
+use "html_render.osc"
+use "storage.osc"
+use "libs/ui.osc"
+
+// ─── Constants ───────────────────────────────────────────
+
+let WIN_W: i32 = 1100;
+let WIN_H: i32 = 700;
+let TREE_W: i32 = 250;
+let STATUS_H: i32 = 24;
+let CHROME_H: i32 = 30;
+let ROW_H: i32 = 20;
+let POST_SPLIT: i32 = 350;
+let BTN_W: i32 = 80;
+let BTN_H: i32 = 22;
+
+// Colors
+let BG_COLOR: i32 = 30 * 65536 + 30 * 256 + 34;
+let PANEL_BG: i32 = 38 * 65536 + 38 * 256 + 42;
+let TITLE_COLOR: i32 = 255 * 65536 + 255 * 256 + 255;
+let TEXT_COLOR: i32 = 200 * 65536 + 200 * 256 + 200;
+let DIM_COLOR: i32 = 130 * 65536 + 130 * 256 + 130;
+let UNREAD_COLOR: i32 = 100 * 65536 + 180 * 256 + 255;
+let READ_COLOR: i32 = 100 * 65536 + 100 * 256 + 105;
+let SELECT_BG: i32 = 55 * 65536 + 55 * 256 + 70;
+let GROUP_COLOR: i32 = 220 * 65536 + 200 * 256 + 255;
+let BADGE_COLOR: i32 = 255 * 65536 + 160 * 256 + 60;
+let LINK_COLOR: i32 = 100 * 65536 + 149 * 256 + 237;
+let BORDER_COLOR: i32 = 65 * 65536 + 65 * 256 + 70;
+let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
+let DIALOG_BG: i32 = 50 * 65536 + 50 * 256 + 55;
+
+// ─── Helpers ─────────────────────────────────────────────
+
+fn! next_id(ids: [i32]) -> i32 {
+    let mut mx: i32 = 0;
+    for ni in 0..len(ids) {
+        if ids[ni] > mx { mx = ids[ni]; };
+    };
+    mx + 1
+}
+
+fn! count_unread(posts: [Post], feed_id: i32, read_guids: map) -> i32 {
+    let mut count: i32 = 0;
+    for ci in 0..len(posts) {
+        if posts[ci].feed_id == feed_id and not map_has(read_guids, posts[ci].guid) {
+            count += 1;
+        };
+    };
+    count
+}
+
+fn! count_group_unread(posts: [Post], feeds: [Feed], group_id: i32, read_guids: map) -> i32 {
+    let mut total: i32 = 0;
+    for cg in 0..len(feeds) {
+        if feeds[cg].group_id == group_id {
+            total += count_unread(posts, feeds[cg].id, read_guids);
+        };
+    };
+    total
+}
+
+fn! truncate_str(s: str, max_chars: i32) -> str {
+    if str_len(s) <= max_chars * 1 {
+        return s;
+    };
+    let chars: [i32] = str_to_chars(s);
+    if len(chars) <= max_chars {
+        return s;
+    };
+    let mut trunc: [i32] = [];
+    for ti in 0..max_chars {
+        push(trunc, chars[ti]);
+    };
+    push(trunc, 46); // '.'
+    push(trunc, 46);
+    push(trunc, 46);
+    str_from_chars(trunc)
+}
+
+fn! text_buf_to_str(buf: [i32]) -> str {
+    str_from_chars(buf)
+}
+
+fn! str_to_buf(s: str, buf: [i32]) {
+    while len(buf) > 0 { pop(buf); };
+    let chars: [i32] = str_to_chars(s);
+    for sb in 0..len(chars) {
+        push(buf, chars[sb]);
+    };
+}
+
+// ─── Read State Persistence Helper ───────────────────────
+
+fn! do_save_read(posts: [Post], read_guids: map) {
+    let mut lines: [str] = [];
+    let mut seen: map = map_new();
+    for si in 0..len(posts) {
+        let sg: str = posts[si].guid;
+        if map_has(read_guids, sg) and not map_has(seen, sg) {
+            push(lines, sg);
+            map_set(seen, sg, "1");
+        };
+    };
+    storage_save_read(lines);
+}
+
+// ─── Feed Fetching ───────────────────────────────────────
+
+fn! fetch_feed_posts(feed: Feed, posts: [Post], read_guids: map) {
+    let response: HttpResponse = http_fetch_url(feed.url, 5);
+    if str_len(response.error) > 0 {
+        return;
+    };
+    if not response.ok {
+        return;
+    };
+
+    let items: [RssItem] = rss_parse_items(response.body);
+
+    // Remove old posts for this feed
+    let mut ri: i32 = len(posts) - 1;
+    while ri >= 0 {
+        if posts[ri].feed_id == feed.id {
+            // Swap with last and pop
+            let last_idx: i32 = len(posts) - 1;
+            if ri < last_idx {
+                posts[ri] = posts[last_idx];
+            };
+            pop(posts);
+        };
+        ri -= 1;
+    };
+
+    // Add new posts
+    for fi2 in 0..len(items) {
+        let item: RssItem = items[fi2];
+        let post: Post = Post {
+            feed_id: feed.id,
+            title: item.title,
+            link: item.link,
+            description: item.description,
+            pub_date: item.pub_date,
+            guid: item.guid,
+        };
+        push(posts, post);
+    };
+}
+
+// ─── Rendering ───────────────────────────────────────────
+
+fn! render_chrome(w: i32) {
+    gfx_fill_rect(0, 0, w, CHROME_H, STATUS_BG);
+    gfx_draw_text(10, 8, "OscanRSS - Feed Reader", TITLE_COLOR, 0);
+    gfx_line(0, CHROME_H, w, CHROME_H, BORDER_COLOR);
+}
+
+fn! render_status(w: i32, h: i32, total_unread: i32, status_msg: str) {
+    let sy: i32 = h - STATUS_H;
+    gfx_fill_rect(0, sy, w, STATUS_H, STATUS_BG);
+    gfx_line(0, sy, w, sy, BORDER_COLOR);
+    gfx_draw_text(10, sy + 6, "{total_unread} unread", TEXT_COLOR, 0);
+    if str_len(status_msg) > 0 {
+        gfx_draw_text(200, sy + 6, status_msg, DIM_COLOR, 0);
+    };
+}
+
+fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
+                      read_guids: map, sel_group: i32, sel_feed: i32,
+                      tree_scroll: i32, panel_h: i32, prev_btn: i32) -> i32 {
+    let px: i32 = 0;
+    let py: i32 = CHROME_H;
+    gfx_fill_rect(px, py, TREE_W, panel_h, PANEL_BG);
+    gfx_line(TREE_W, py, TREE_W, py + panel_h, BORDER_COLOR);
+
+    let mut draw_y: i32 = py + 6 - tree_scroll;
+    let mut clicked_type: i32 = -1; // -1 = none, 0..N = encoded
+
+    for gi in 0..len(groups) {
+        let g: FeedGroup = groups[gi];
+        let gy: i32 = draw_y;
+        if gy >= py and gy < py + panel_h - ROW_H {
+            // Highlight if selected
+            if g.id == sel_group and sel_feed < 0 {
+                gfx_fill_rect(px, gy, TREE_W - 1, ROW_H, SELECT_BG);
+            };
+
+            // Expand/collapse arrow
+            let arrow: str = if g.expanded { "v" } else { ">" };
+            gfx_draw_text(px + 6, gy + 4, arrow, DIM_COLOR, 0);
+
+            // Group name
+            let gname: str = truncate_str(g.name, 20);
+            gfx_draw_text(px + 20, gy + 4, gname, GROUP_COLOR, 0);
+
+            // Unread badge
+            let gunread: i32 = count_group_unread(posts, feeds, g.id, read_guids);
+            if gunread > 0 {
+                let badge: str = "({gunread})";
+                gfx_draw_text(px + 22 + str_len(gname) * 8, gy + 4, badge, BADGE_COLOR, 0);
+            };
+
+            // Click detection for group
+            let mx: i32 = canvas_mouse_x();
+            let my: i32 = canvas_mouse_y();
+            let mbtn: i32 = canvas_mouse_btn();
+            if ui_in_rect(mx, my, px, gy, TREE_W, ROW_H) and band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
+                clicked_type = 10000 + gi;
+            };
+        };
+        draw_y += ROW_H;
+
+        // Draw feeds under this group if expanded
+        if g.expanded {
+            for fi3 in 0..len(feeds) {
+                if feeds[fi3].group_id == g.id {
+                    let fy: i32 = draw_y;
+                    if fy >= py and fy < py + panel_h - ROW_H {
+                        if feeds[fi3].id == sel_feed {
+                            gfx_fill_rect(px, fy, TREE_W - 1, ROW_H, SELECT_BG);
+                        };
+
+                        gfx_draw_text(px + 24, fy + 4, "*", DIM_COLOR, 0);
+                        let fname: str = truncate_str(feeds[fi3].name, 18);
+                        gfx_draw_text(px + 36, fy + 4, fname, TEXT_COLOR, 0);
+
+                        let funread: i32 = count_unread(posts, feeds[fi3].id, read_guids);
+                        if funread > 0 {
+                            let fbadge: str = "({funread})";
+                            gfx_draw_text(px + 38 + str_len(fname) * 8, fy + 4, fbadge, BADGE_COLOR, 0);
+                        };
+
+                        let mx2: i32 = canvas_mouse_x();
+                        let my2: i32 = canvas_mouse_y();
+                        let mbtn2: i32 = canvas_mouse_btn();
+                        if ui_in_rect(mx2, my2, px, fy, TREE_W, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
+                            clicked_type = 20000 + fi3;
+                        };
+                    };
+                    draw_y += ROW_H;
+                };
+            };
+        };
+    };
+
+    clicked_type
+}
+
+fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
+                     read_guids: map, show_unread_only: bool,
+                     list_scroll: i32, panel_x: i32, panel_w: i32,
+                     panel_h: i32, prev_btn: i32) -> i32 {
+    let py: i32 = CHROME_H;
+    let max_y: i32 = py + POST_SPLIT;
+    gfx_fill_rect(panel_x, py, panel_w, POST_SPLIT, BG_COLOR);
+
+    // Header
+    gfx_draw_text(panel_x + 8, py + 6, "Posts", TITLE_COLOR, 0);
+    gfx_line(panel_x, py + ROW_H, panel_x + panel_w, py + ROW_H, BORDER_COLOR);
+
+    let mut draw_y: i32 = py + ROW_H + 4 - list_scroll;
+    let mut clicked_post: i32 = -1;
+    let mut visible_idx: i32 = 0;
+
+    for pi in 0..len(posts) {
+        let pi_match: bool = posts[pi].feed_id == sel_feed;
+        let is_read: bool = map_has(read_guids, posts[pi].guid);
+        let pi_filtered: bool = show_unread_only and is_read;
+
+        if pi_match and not pi_filtered {
+            if draw_y >= py + ROW_H and draw_y < max_y - ROW_H {
+                // Selection highlight
+                if pi == sel_post {
+                    gfx_fill_rect(panel_x, draw_y - 2, panel_w, ROW_H + 4, SELECT_BG);
+                };
+
+                // Read/unread indicator
+                let indicator: str = if is_read { "o" } else { "*" };
+                let ind_color: i32 = if is_read { READ_COLOR } else { UNREAD_COLOR };
+                gfx_draw_text(panel_x + 8, draw_y + 2, indicator, ind_color, 0);
+
+                // Title
+                let max_title: i32 = (panel_w - 100) / 8;
+                let ptitle: str = truncate_str(posts[pi].title, max_title);
+                let title_color: i32 = if is_read { DIM_COLOR } else { TEXT_COLOR };
+                gfx_draw_text(panel_x + 22, draw_y + 2, ptitle, title_color, 0);
+
+                // Date (right-aligned, truncated)
+                let pdate: str = truncate_str(posts[pi].pub_date, 16);
+                let date_x: i32 = panel_x + panel_w - str_len(pdate) * 8 - 8;
+                gfx_draw_text(date_x, draw_y + 2, pdate, DIM_COLOR, 0);
+
+                // Click detection
+                let mx3: i32 = canvas_mouse_x();
+                let my3: i32 = canvas_mouse_y();
+                let mbtn3: i32 = canvas_mouse_btn();
+                if ui_in_rect(mx3, my3, panel_x, draw_y - 2, panel_w, ROW_H + 4) and band(mbtn3, 1) == 1 and band(prev_btn, 1) == 0 {
+                    clicked_post = pi;
+                };
+            };
+
+            draw_y += ROW_H + 2;
+            visible_idx += 1;
+        };
+    };
+
+    // Separator below post list
+    gfx_line(panel_x, py + POST_SPLIT, panel_x + panel_w, py + POST_SPLIT, BORDER_COLOR);
+
+    clicked_post
+}
+
+fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
+                        panel_w: i32, content_y: i32, content_h: i32,
+                        content_scroll: i32,
+                        content_links: [LinkRegion],
+                        img_cache_idx: map, img_cache_data: [[i32]],
+                        img_cache_w: [i32], img_cache_h: [i32]) {
+    gfx_fill_rect(panel_x, content_y, panel_w, content_h, BG_COLOR);
+
+    // Clear link regions from previous frame
+    while len(content_links) > 0 { pop(content_links); };
+
+    if sel_post < 0 or sel_post >= len(posts) {
+        gfx_draw_text(panel_x + 20, content_y + 20, "Select a post to read", DIM_COLOR, 0);
+        return;
+    };
+
+    let post: Post = posts[sel_post];
+
+    // Header area (title, date, link)
+    let header_h: i32 = 60;
+    let mut cy: i32 = content_y + 8 - content_scroll;
+
+    // Title
+    if cy >= content_y and cy < content_y + content_h {
+        gfx_draw_text(panel_x + 8, cy, post.title, TITLE_COLOR, 0);
+    };
+    cy += 18;
+
+    // Date
+    if cy >= content_y and cy < content_y + content_h {
+        gfx_draw_text(panel_x + 8, cy, post.pub_date, DIM_COLOR, 0);
+    };
+    cy += 14;
+
+    // Link (clickable — register as link region)
+    let link_disp: str = truncate_str(post.link, 60);
+    if cy >= content_y and cy < content_y + content_h {
+        gfx_draw_text(panel_x + 8, cy, link_disp, LINK_COLOR, 0);
+        gfx_line(panel_x + 8, cy + 10, panel_x + 8 + str_len(link_disp) * 8, cy + 10, LINK_COLOR);
+        let header_link: LinkRegion = LinkRegion {
+            x: panel_x + 8, y: cy,
+            w: str_len(link_disp) * 8, h: 14,
+            href: post.link,
+        };
+        push(content_links, header_link);
+    };
+    cy += 18;
+
+    // Separator
+    if cy >= content_y and cy < content_y + content_h {
+        gfx_line(panel_x + 8, cy, panel_x + panel_w - 8, cy, BORDER_COLOR);
+    };
+    cy += 10;
+
+    // Render HTML description
+    let desc_y: i32 = cy;
+    let desc_h: i32 = content_y + content_h - desc_y;
+    if desc_h > 0 and str_len(post.description) > 0 {
+        let desc_scroll: i32 = if content_scroll > header_h { content_scroll - header_h } else { 0 };
+        let _total_h: i32 = html_render_content(post.description,
+                                                 panel_x, desc_y,
+                                                 panel_w, desc_h,
+                                                 desc_scroll,
+                                                 content_links,
+                                                 img_cache_idx, img_cache_data,
+                                                 img_cache_w, img_cache_h,
+                                                 post.link);
+    };
+}
+
+fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
+                  focused_field: i32, key: i32, prev_btn: i32,
+                  w: i32, h: i32) -> i32 {
+    // Returns: 0=pending, 1=OK, 2=Cancel
+    let dw: i32 = 400;
+    let dh: i32 = 180;
+    let dx: i32 = (w - dw) / 2;
+    let dy: i32 = (h - dh) / 2;
+
+    // Dim background
+    gfx_fill_rect(0, 0, w, h, rgb(0, 0, 0));
+
+    // Dialog panel
+    gfx_fill_rect(dx, dy, dw, dh, DIALOG_BG);
+    gfx_rect(dx, dy, dw, dh, UI_ACCENT);
+
+    // Title
+    let title: str = match mode {
+        AppMode::AddGroup => { "Add Group" },
+        AppMode::EditGroup => { "Edit Group" },
+        AppMode::AddFeed => { "Add Feed" },
+        AppMode::EditFeed => { "Edit Feed" },
+        AppMode::Confirm => { "Confirm Delete" },
+        AppMode::Normal => { "Dialog" },
+    };
+    gfx_draw_text(dx + 10, dy + 8, title, TITLE_COLOR, 0);
+    gfx_line(dx, dy + 24, dx + dw, dy + 24, BORDER_COLOR);
+
+    let mut result: i32 = 0;
+
+    match mode {
+        AppMode::AddGroup => {
+            gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
+            let _f1: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+        },
+        AppMode::EditGroup => {
+            gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
+            let _f2: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+        },
+        AppMode::AddFeed => {
+            gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
+            let _f3: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, focused_field == 0, prev_btn, key);
+            gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
+            let _f4: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, focused_field == 1, prev_btn, key);
+        },
+        AppMode::EditFeed => {
+            gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
+            let _f5: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, focused_field == 0, prev_btn, key);
+            gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
+            let _f6: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, focused_field == 1, prev_btn, key);
+        },
+        AppMode::Confirm => {
+            gfx_draw_text(dx + 10, dy + 50, "Are you sure you want to delete?", TEXT_COLOR, 0);
+        },
+        _ => {},
+    };
+
+    // OK / Cancel buttons
+    let btn_y: i32 = dy + dh - 34;
+    if ui_button(dx + dw - 180, btn_y, 80, BTN_H, "OK", prev_btn) {
+        result = 1;
+    };
+    if ui_button(dx + dw - 90, btn_y, 80, BTN_H, "Cancel", prev_btn) {
+        result = 2;
+    };
+
+    // Enter = OK, Escape = Cancel
+    if key == 13 { result = 1; };
+    if key == 27 { result = 2; };
+
+    result
+}
+
+fn! render_help(w: i32, h: i32) {
+    let dw: i32 = 350;
+    let dh: i32 = 320;
+    let dx: i32 = (w - dw) / 2;
+    let dy: i32 = (h - dh) / 2;
+
+    gfx_fill_rect(dx, dy, dw, dh, DIALOG_BG);
+    gfx_rect(dx, dy, dw, dh, UI_ACCENT);
+    gfx_draw_text(dx + 10, dy + 8, "Keyboard Shortcuts", TITLE_COLOR, 0);
+    gfx_line(dx, dy + 24, dx + dw, dy + 24, BORDER_COLOR);
+
+    let mut hy: i32 = dy + 32;
+    let hx: i32 = dx + 10;
+    let hx2: i32 = dx + 100;
+    gfx_draw_text(hx, hy, "j / k", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Navigate up/down", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "Enter", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Select / expand", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "Tab", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Switch panel", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "a", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Add group/feed", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "e", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Edit selected", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "d", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Delete selected", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "r", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh feed", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "R", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh all", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "u", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle unread filter", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "m", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle read/unread", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "M", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Mark all read", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "?", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle help", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "q", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Quit", TEXT_COLOR, 0); hy += 16;
+
+    gfx_draw_text(dx + 10, dy + dh - 20, "Press ? or Esc to close", DIM_COLOR, 0);
+}
+
+// ─── Main ────────────────────────────────────────────────
+
+fn! main() {
+    // Application state
+    let mut groups: [FeedGroup] = [];
+    let mut feeds: [Feed] = [];
+    let mut posts: [Post] = [];
+    let mut read_guids: map = map_new();
+
+    // Load persisted data
+    storage_load_groups(groups);
+    storage_load_feeds(feeds);
+    storage_load_read(read_guids);
+
+    // UI state
+    let mut sel_group: i32 = -1;
+    let mut sel_feed: i32 = -1;
+    let mut sel_post: i32 = -1;
+    let mut focus_panel: i32 = 0; // 0=tree, 1=posts, 2=content
+    let mut show_unread_only: bool = false;
+    let mut show_help: bool = false;
+    let mut tree_scroll: i32 = 0;
+    let mut list_scroll: i32 = 0;
+    let mut content_scroll: i32 = 0;
+    let mut prev_btn: i32 = 0;
+    let mut status_msg: str = "Welcome to OscanRss";
+
+    // Dialog state
+    let mut mode: AppMode = AppMode::Normal;
+    let mut dialog_buf1: [i32] = [];
+    let mut dialog_buf2: [i32] = [];
+    let mut dialog_field: i32 = 0;
+
+    // Link and image state
+    let mut content_links: [LinkRegion] = [];
+    let mut img_cache_idx: map = map_new();
+    let mut img_cache_data: [[i32]] = [];
+    let mut img_cache_w: [i32] = [];
+    let mut img_cache_h: [i32] = [];
+
+    // Select first group if available
+    if len(groups) > 0 {
+        sel_group = groups[0].id;
+    };
+
+    // Open canvas
+    let open_result: Result<str, str> = canvas_open(WIN_W, WIN_H, "OscanRss");
+    match open_result {
+        Result::Ok(_s) => {},
+        Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
+    };
+
+    while canvas_alive() {
+        let key: i32 = canvas_key();
+        let w: i32 = canvas_width();
+        let h: i32 = canvas_height();
+        let wheel: i32 = canvas_wheel();
+        let panel_w: i32 = w - TREE_W;
+        let panel_h: i32 = h - CHROME_H - STATUS_H;
+        let content_y: i32 = CHROME_H + POST_SPLIT;
+        let content_h: i32 = h - CHROME_H - POST_SPLIT - STATUS_H;
+
+        // ─── Input handling (outside rendering) ──────────
+
+        let mut is_normal: bool = false;
+        match mode {
+            AppMode::Normal => { is_normal = true; },
+            _ => {},
+        };
+
+        if is_normal and not show_help {
+            // Keyboard shortcuts
+            if key == 113 { // 'q'
+                break;
+            };
+            if key == 63 { // '?'
+                show_help = true;
+            };
+            if key == 9 { // Tab
+                focus_panel = mod_i32(focus_panel + 1, 3);
+            };
+            if key == 117 { // 'u'
+                show_unread_only = not show_unread_only;
+            };
+
+            // Navigation
+            if key == 106 or key == 107 { // j/k
+                if focus_panel == 0 {
+                    // Tree navigation (simplified: cycle groups)
+                    if key == 106 { // j = next
+                        let mut found: bool = false;
+                        for gn in 0..len(groups) {
+                            if found {
+                                sel_group = groups[gn].id;
+                                sel_feed = -1;
+                                sel_post = -1;
+                                break;
+                            };
+                            if groups[gn].id == sel_group { found = true; };
+                        };
+                    };
+                    if key == 107 { // k = prev
+                        let mut prev_gid: i32 = -1;
+                        for gp in 0..len(groups) {
+                            if groups[gp].id == sel_group and prev_gid >= 0 {
+                                sel_group = prev_gid;
+                                sel_feed = -1;
+                                sel_post = -1;
+                                break;
+                            };
+                            prev_gid = groups[gp].id;
+                        };
+                    };
+                } else if focus_panel == 1 {
+                    // Post list navigation
+                    if key == 106 { // j
+                        let mut next_post: i32 = -1;
+                        let mut found_cur: bool = false;
+                        for pn in 0..len(posts) {
+                            let pn_ok: bool = posts[pn].feed_id == sel_feed and not (show_unread_only and map_has(read_guids, posts[pn].guid));
+                            if pn_ok {
+                                if found_cur and next_post < 0 { next_post = pn; };
+                                if pn == sel_post { found_cur = true; };
+                                if sel_post < 0 and next_post < 0 { next_post = pn; };
+                            };
+                        };
+                        if next_post >= 0 {
+                            sel_post = next_post;
+                            map_set(read_guids, posts[sel_post].guid, "1");
+                            do_save_read(posts, read_guids);
+                        };
+                    };
+                    if key == 107 { // k
+                        let mut prev_post: i32 = -1;
+                        let mut found_sel: bool = false;
+                        for pp in 0..len(posts) {
+                            let pp_ok: bool = posts[pp].feed_id == sel_feed and not (show_unread_only and map_has(read_guids, posts[pp].guid));
+                            if pp_ok {
+                                if pp == sel_post { found_sel = true; };
+                                if not found_sel { prev_post = pp; };
+                            };
+                        };
+                        if prev_post >= 0 {
+                            sel_post = prev_post;
+                            map_set(read_guids, posts[sel_post].guid, "1");
+                            do_save_read(posts, read_guids);
+                        };
+                    };
+                };
+            };
+
+            // Enter: expand/collapse group or select feed
+            if key == 13 {
+                if focus_panel == 0 and sel_group >= 0 {
+                    for ge in 0..len(groups) {
+                        if groups[ge].id == sel_group {
+                            groups[ge].expanded = not groups[ge].expanded;
+                            storage_save_groups(groups);
+                            break;
+                        };
+                    };
+                };
+            };
+
+            // 'a' = add
+            if key == 97 {
+                if focus_panel == 0 {
+                    if sel_feed >= 0 or (sel_group >= 0 and len(groups) > 0) {
+                        mode = AppMode::AddFeed;
+                        while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                        while len(dialog_buf2) > 0 { pop(dialog_buf2); };
+                        dialog_field = 0;
+                    } else {
+                        mode = AppMode::AddGroup;
+                        while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                    };
+                } else {
+                    mode = AppMode::AddGroup;
+                    while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                };
+            };
+
+            // 'e' = edit
+            if key == 101 {
+                if sel_feed >= 0 {
+                    for ef in 0..len(feeds) {
+                        if feeds[ef].id == sel_feed {
+                            mode = AppMode::EditFeed;
+                            str_to_buf(feeds[ef].name, dialog_buf1);
+                            str_to_buf(feeds[ef].url, dialog_buf2);
+                            dialog_field = 0;
+                            break;
+                        };
+                    };
+                } else if sel_group >= 0 {
+                    for eg in 0..len(groups) {
+                        if groups[eg].id == sel_group {
+                            mode = AppMode::EditGroup;
+                            str_to_buf(groups[eg].name, dialog_buf1);
+                            break;
+                        };
+                    };
+                };
+            };
+
+            // 'd' = delete
+            if key == 100 {
+                if sel_feed >= 0 or sel_group >= 0 {
+                    mode = AppMode::Confirm;
+                };
+            };
+
+            // 'r' = refresh selected feed
+            if key == 114 {
+                if sel_feed >= 0 {
+                    for rf in 0..len(feeds) {
+                        if feeds[rf].id == sel_feed {
+                            status_msg = "Refreshing {feeds[rf].name}...";
+                            fetch_feed_posts(feeds[rf], posts, read_guids);
+                            status_msg = "Refreshed {feeds[rf].name}";
+                            break;
+                        };
+                    };
+                };
+            };
+
+            // 'R' = refresh all
+            if key == 82 {
+                status_msg = "Refreshing all feeds...";
+                for ra in 0..len(feeds) {
+                    fetch_feed_posts(feeds[ra], posts, read_guids);
+                };
+                status_msg = "All feeds refreshed";
+            };
+
+            // 'm' = toggle read/unread
+            if key == 109 {
+                if sel_post >= 0 and sel_post < len(posts) {
+                    let pguid: str = posts[sel_post].guid;
+                    if map_has(read_guids, pguid) {
+                        map_delete(read_guids, pguid);
+                    } else {
+                        map_set(read_guids, pguid, "1");
+                    };
+                    do_save_read(posts, read_guids);
+                };
+            };
+
+            // 'M' = mark all read
+            if key == 77 {
+                if sel_feed >= 0 {
+                    for ma in 0..len(posts) {
+                        if posts[ma].feed_id == sel_feed {
+                            map_set(read_guids, posts[ma].guid, "1");
+                        };
+                    };
+                    do_save_read(posts, read_guids);
+                    status_msg = "All posts marked as read";
+                };
+            };
+
+            // Scroll
+            if wheel != 0 {
+                if focus_panel == 0 {
+                    tree_scroll = max_i32(0, tree_scroll - wheel * ROW_H);
+                } else if focus_panel == 1 {
+                    list_scroll = max_i32(0, list_scroll - wheel * ROW_H);
+                } else {
+                    content_scroll = max_i32(0, content_scroll - wheel * 14);
+                };
+            };
+
+            // Tab key in feed dialog to switch fields
+        } else if show_help {
+            if key == 63 or key == 27 { // '?' or Esc
+                show_help = false;
+            };
+        };
+
+        // ─── Rendering ───────────────────────────────────
+
+        canvas_clear(BG_COLOR);
+
+        // Chrome bar
+        render_chrome(w);
+
+        // Tree panel buttons
+        let btn_x: i32 = 4;
+        let btn_base_y: i32 = h - STATUS_H - BTN_H - 6;
+        let add_group_clicked: bool = ui_button(btn_x, btn_base_y, 58, BTN_H, "+Group", prev_btn);
+        let add_feed_clicked: bool = ui_button(btn_x + 62, btn_base_y, 56, BTN_H, "+Feed", prev_btn);
+        let edit_clicked: bool = ui_button(btn_x + 122, btn_base_y, 50, BTN_H, "Edit", prev_btn);
+        let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H, "Del", prev_btn);
+
+        // Refresh button in chrome
+        let refresh_clicked: bool = ui_button(w - 100, 4, 90, BTN_H, "Refresh", prev_btn);
+
+        // Filter toggle
+        let filter_text: str = if show_unread_only { "Show All" } else { "Unread" };
+        let filter_clicked: bool = ui_button(TREE_W + panel_w - 80, CHROME_H + 2, 72, 18, filter_text, prev_btn);
+
+        // Handle button clicks (in Normal mode)
+        if is_normal and not show_help {
+            if add_group_clicked {
+                mode = AppMode::AddGroup;
+                while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+            };
+            if add_feed_clicked and sel_group >= 0 {
+                mode = AppMode::AddFeed;
+                while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                while len(dialog_buf2) > 0 { pop(dialog_buf2); };
+                dialog_field = 0;
+            };
+            if edit_clicked {
+                if sel_feed >= 0 {
+                    for ef2 in 0..len(feeds) {
+                        if feeds[ef2].id == sel_feed {
+                            mode = AppMode::EditFeed;
+                            str_to_buf(feeds[ef2].name, dialog_buf1);
+                            str_to_buf(feeds[ef2].url, dialog_buf2);
+                            dialog_field = 0;
+                            break;
+                        };
+                    };
+                } else if sel_group >= 0 {
+                    for eg2 in 0..len(groups) {
+                        if groups[eg2].id == sel_group {
+                            mode = AppMode::EditGroup;
+                            str_to_buf(groups[eg2].name, dialog_buf1);
+                            break;
+                        };
+                    };
+                };
+            };
+            if del_clicked and (sel_feed >= 0 or sel_group >= 0) {
+                mode = AppMode::Confirm;
+            };
+            if refresh_clicked {
+                status_msg = "Refreshing all feeds...";
+                for ra2 in 0..len(feeds) {
+                    fetch_feed_posts(feeds[ra2], posts, read_guids);
+                };
+                status_msg = "All feeds refreshed";
+            };
+            if filter_clicked {
+                show_unread_only = not show_unread_only;
+            };
+        };
+
+        // Tree panel
+        let tree_click: i32 = render_tree_panel(groups, feeds, posts, read_guids,
+                                                 sel_group, sel_feed, tree_scroll,
+                                                 panel_h - BTN_H - 10, prev_btn);
+        if tree_click >= 20000 and is_normal {
+            // Clicked a feed
+            let fidx: i32 = tree_click - 20000;
+            if fidx >= 0 and fidx < len(feeds) {
+                sel_feed = feeds[fidx].id;
+                sel_group = feeds[fidx].group_id;
+                sel_post = -1;
+                list_scroll = 0;
+                focus_panel = 1;
+            };
+        } else if tree_click >= 10000 and is_normal {
+            // Clicked a group
+            let gidx: i32 = tree_click - 10000;
+            if gidx >= 0 and gidx < len(groups) {
+                sel_group = groups[gidx].id;
+                sel_feed = -1;
+                sel_post = -1;
+                groups[gidx].expanded = not groups[gidx].expanded;
+                storage_save_groups(groups);
+                focus_panel = 0;
+            };
+        };
+
+        // Post list
+        if sel_feed >= 0 {
+            let post_click: i32 = render_post_list(posts, sel_feed, sel_post,
+                                                    read_guids, show_unread_only,
+                                                    list_scroll, TREE_W, panel_w,
+                                                    panel_h, prev_btn);
+            if post_click >= 0 and is_normal {
+                sel_post = post_click;
+                content_scroll = 0;
+                focus_panel = 2;
+                // Auto-mark as read
+                map_set(read_guids, posts[sel_post].guid, "1");
+                do_save_read(posts, read_guids);
+            };
+        } else {
+            gfx_fill_rect(TREE_W, CHROME_H, panel_w, panel_h, BG_COLOR);
+            gfx_draw_text(TREE_W + 20, CHROME_H + 40, "Select a feed to view posts", DIM_COLOR, 0);
+        };
+
+        // Post content
+        if sel_feed >= 0 {
+            render_post_content(posts, sel_post, TREE_W, panel_w,
+                               content_y, content_h, content_scroll,
+                               content_links,
+                               img_cache_idx, img_cache_data,
+                               img_cache_w, img_cache_h);
+
+            // Link click detection: check if mouse click hit a link
+            let lmx: i32 = canvas_mouse_x();
+            let lmy: i32 = canvas_mouse_y();
+            let lbtn: i32 = canvas_mouse_btn();
+            if band(lbtn, 1) == 1 and band(prev_btn, 1) == 0 and is_normal {
+                for lk in 0..len(content_links) {
+                    let lr: LinkRegion = content_links[lk];
+                    if ui_in_rect(lmx, lmy, lr.x, lr.y, lr.w, lr.h) {
+                        if str_len(lr.href) > 0 {
+                            open_url_in_browser(lr.href);
+                            status_msg = "Opened: {lr.href}";
+                        };
+                    };
+                };
+            };
+        };
+
+        // Status bar
+        let mut total_unread: i32 = 0;
+        for tu in 0..len(posts) {
+            if not map_has(read_guids, posts[tu].guid) {
+                total_unread += 1;
+            };
+        };
+        render_status(w, h, total_unread, status_msg);
+
+        // Dialog overlay
+        let mut is_dialog: bool = false;
+        match mode {
+            AppMode::Normal => {},
+            _ => { is_dialog = true; },
+        };
+
+        if is_dialog {
+            let dialog_key: i32 = if is_dialog { key } else { 0 };
+            // Tab between fields in feed dialogs
+            let mut use_field: i32 = dialog_field;
+            let mut is_feed_dialog: bool = false;
+            match mode {
+                AppMode::AddFeed => { is_feed_dialog = true; },
+                AppMode::EditFeed => { is_feed_dialog = true; },
+                _ => {},
+            };
+            if is_feed_dialog and dialog_key == 9 {
+                use_field = mod_i32(dialog_field + 1, 2);
+                dialog_field = use_field;
+            };
+
+            let dres: i32 = render_dialog(mode, dialog_buf1, dialog_buf2,
+                                           dialog_field, dialog_key, prev_btn, w, h);
+
+            if dres == 1 { // OK
+                match mode {
+                    AppMode::AddGroup => {
+                        let gname_new: str = text_buf_to_str(dialog_buf1);
+                        if str_len(gname_new) > 0 {
+                            let mut id_list: [i32] = [];
+                            for ag in 0..len(groups) { push(id_list, groups[ag].id); };
+                            let new_id: i32 = next_id(id_list);
+                            let new_group: FeedGroup = FeedGroup {
+                                id: new_id, name: gname_new, expanded: true,
+                            };
+                            push(groups, new_group);
+                            sel_group = new_id;
+                            storage_save_groups(groups);
+                            status_msg = "Group added: {gname_new}";
+                        };
+                    },
+                    AppMode::EditGroup => {
+                        let new_name: str = text_buf_to_str(dialog_buf1);
+                        if str_len(new_name) > 0 {
+                            for ug in 0..len(groups) {
+                                if groups[ug].id == sel_group {
+                                    groups[ug].name = new_name;
+                                    break;
+                                };
+                            };
+                            storage_save_groups(groups);
+                            status_msg = "Group renamed";
+                        };
+                    },
+                    AppMode::AddFeed => {
+                        let fname_new: str = text_buf_to_str(dialog_buf1);
+                        let furl_new: str = text_buf_to_str(dialog_buf2);
+                        if str_len(fname_new) > 0 and str_len(furl_new) > 0 and sel_group >= 0 {
+                            let mut fid_list: [i32] = [];
+                            for af in 0..len(feeds) { push(fid_list, feeds[af].id); };
+                            let new_fid: i32 = next_id(fid_list);
+                            let new_feed: Feed = Feed {
+                                id: new_fid, group_id: sel_group,
+                                name: fname_new, url: furl_new,
+                            };
+                            push(feeds, new_feed);
+                            sel_feed = new_fid;
+                            storage_save_feeds(feeds);
+                            status_msg = "Feed added: {fname_new}";
+                            // Fetch posts
+                            fetch_feed_posts(new_feed, posts, read_guids);
+                        };
+                    },
+                    AppMode::EditFeed => {
+                        let ef_name: str = text_buf_to_str(dialog_buf1);
+                        let ef_url: str = text_buf_to_str(dialog_buf2);
+                        if str_len(ef_name) > 0 and str_len(ef_url) > 0 {
+                            for uf in 0..len(feeds) {
+                                if feeds[uf].id == sel_feed {
+                                    feeds[uf].name = ef_name;
+                                    feeds[uf].url = ef_url;
+                                    break;
+                                };
+                            };
+                            storage_save_feeds(feeds);
+                            status_msg = "Feed updated";
+                        };
+                    },
+                    AppMode::Confirm => {
+                        // Delete
+                        if sel_feed >= 0 {
+                            // Remove feed's posts
+                            let mut di: i32 = len(posts) - 1;
+                            while di >= 0 {
+                                if posts[di].feed_id == sel_feed {
+                                    let dlast: i32 = len(posts) - 1;
+                                    if di < dlast { posts[di] = posts[dlast]; };
+                                    pop(posts);
+                                };
+                                di -= 1;
+                            };
+                            // Remove the feed
+                            let mut di2: i32 = len(feeds) - 1;
+                            while di2 >= 0 {
+                                if feeds[di2].id == sel_feed {
+                                    let dlast2: i32 = len(feeds) - 1;
+                                    if di2 < dlast2 { feeds[di2] = feeds[dlast2]; };
+                                    pop(feeds);
+                                    break;
+                                };
+                                di2 -= 1;
+                            };
+                            sel_feed = -1;
+                            sel_post = -1;
+                            storage_save_feeds(feeds);
+                            status_msg = "Feed deleted";
+                        } else if sel_group >= 0 {
+                            // Remove all feeds in group
+                            let mut di3: i32 = len(feeds) - 1;
+                            while di3 >= 0 {
+                                if feeds[di3].group_id == sel_group {
+                                    // Remove posts for this feed
+                                    let del_fid: i32 = feeds[di3].id;
+                                    let mut di4: i32 = len(posts) - 1;
+                                    while di4 >= 0 {
+                                        if posts[di4].feed_id == del_fid {
+                                            let dlast4: i32 = len(posts) - 1;
+                                            if di4 < dlast4 { posts[di4] = posts[dlast4]; };
+                                            pop(posts);
+                                        };
+                                        di4 -= 1;
+                                    };
+                                    let dlast3: i32 = len(feeds) - 1;
+                                    if di3 < dlast3 { feeds[di3] = feeds[dlast3]; };
+                                    pop(feeds);
+                                };
+                                di3 -= 1;
+                            };
+                            // Remove the group
+                            let mut di5: i32 = len(groups) - 1;
+                            while di5 >= 0 {
+                                if groups[di5].id == sel_group {
+                                    let dlast5: i32 = len(groups) - 1;
+                                    if di5 < dlast5 { groups[di5] = groups[dlast5]; };
+                                    pop(groups);
+                                    break;
+                                };
+                                di5 -= 1;
+                            };
+                            sel_group = if len(groups) > 0 { groups[0].id } else { -1 };
+                            sel_feed = -1;
+                            sel_post = -1;
+                            storage_save_groups(groups);
+                            storage_save_feeds(feeds);
+                            status_msg = "Group deleted";
+                        };
+                    },
+                    _ => {},
+                };
+                mode = AppMode::Normal;
+            };
+            if dres == 2 { // Cancel
+                mode = AppMode::Normal;
+            };
+        };
+
+        // Help overlay
+        if show_help {
+            render_help(w, h);
+        };
+
+        // Update prev_btn
+        prev_btn = canvas_mouse_btn();
+
+        canvas_flush();
+        sleep_ms(16);
+    };
+
+    canvas_close();
+}

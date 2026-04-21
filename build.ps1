@@ -1,0 +1,94 @@
+<#
+.SYNOPSIS
+    Build script for OscanRss reader.
+.EXAMPLE
+    .\build.ps1              # Build
+    .\build.ps1 -Run         # Build and run
+    .\build.ps1 -Clean       # Remove build artifacts
+    .\build.ps1 -Test        # Compile and run tests
+    .\build.ps1 -V           # Verbose build
+#>
+param(
+    [switch]$Run,
+    [switch]$Clean,
+    [switch]$Test,
+    [Alias('V')][switch]$Verbose
+)
+
+$ErrorActionPreference = 'Stop'
+
+$ProjectDir = $PSScriptRoot
+$BuildDir   = Join-Path $ProjectDir 'build'
+$MainSource = Join-Path $ProjectDir 'main.osc'
+$_isWin     = $env:OS -eq 'Windows_NT'
+$OutputBin  = Join-Path $BuildDir $(if ($_isWin) { 'oscanrss.exe' } else { 'oscanrss' })
+
+function Write-Step { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
+function Write-Ok   { param([string]$msg) Write-Host "   OK: $msg" -ForegroundColor Green }
+function Write-Fail { param([string]$msg) Write-Host "   ERROR: $msg" -ForegroundColor Red; exit 1 }
+
+if ($Clean) {
+    Write-Step 'Cleaning build artifacts'
+    if (Test-Path $BuildDir) { Remove-Item $BuildDir -Recurse -Force }
+    Write-Ok 'Clean complete'
+    exit 0
+}
+
+if (-not (Get-Command 'oscan' -ErrorAction SilentlyContinue)) {
+    Write-Fail 'oscan not found in PATH. Install from https://github.com/lucabol/Oscan'
+}
+
+if ($Test) {
+    Write-Step 'Running tests'
+    $testFiles = Get-ChildItem -Path (Join-Path $ProjectDir 'tests') -Filter '*.osc' -ErrorAction SilentlyContinue
+    if (-not $testFiles -or $testFiles.Count -eq 0) {
+        Write-Host '   No test files found in tests/' -ForegroundColor Yellow
+        exit 0
+    }
+    $failed = 0
+    foreach ($tf in $testFiles) {
+        Write-Host "   Running $($tf.Name) ... " -NoNewline
+        $testArgs = @($tf.FullName, '--run')
+        if ($Verbose) {
+            & oscan @testArgs
+        } else {
+            & oscan @testArgs 2>&1 | Out-Null
+        }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host 'PASS' -ForegroundColor Green
+        } else {
+            Write-Host 'FAIL' -ForegroundColor Red
+            $failed++
+        }
+    }
+    if ($failed -gt 0) { Write-Fail "$failed test(s) failed" }
+    Write-Ok 'All tests passed'
+    exit 0
+}
+
+if (-not (Test-Path $MainSource)) {
+    Write-Fail "Main source file not found: $MainSource"
+}
+
+if (-not (Test-Path $BuildDir)) {
+    New-Item -ItemType Directory -Path $BuildDir | Out-Null
+}
+
+Write-Step "Compiling $MainSource"
+$oscanArgs = @($MainSource, '-o', $OutputBin)
+if ($Verbose) { $oscanArgs += @('--warnings', '--verbose') }
+
+if ($Verbose) {
+    Write-Host "   oscan $($oscanArgs -join ' ')" -ForegroundColor DarkGray
+    & oscan @oscanArgs
+} else {
+    & oscan @oscanArgs 2>&1 | Out-Null
+}
+if ($LASTEXITCODE -ne 0) { Write-Fail 'Compilation failed' }
+Write-Ok "Built $OutputBin"
+
+if ($Run) {
+    Write-Step "Running $OutputBin"
+    & $OutputBin @args
+    exit $LASTEXITCODE
+}

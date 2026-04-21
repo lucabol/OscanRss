@@ -1,0 +1,247 @@
+// RSS 2.0 XML parser for OscanRss
+// Parses RSS XML feeds into structured data.
+
+struct RssChannel {
+    title: str,
+    link: str,
+    description: str,
+}
+
+struct RssItem {
+    title: str,
+    link: str,
+    description: str,
+    pub_date: str,
+    guid: str,
+}
+
+// Decode XML/HTML entities
+fn! xml_entity_decode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    let n: i32 = len(chars);
+
+    while i < n {
+        if chars[i] == 38 { // '&'
+            let mut end: i32 = i + 1;
+            while end < n and chars[end] != 59 and end - i < 12 {
+                end += 1;
+            };
+            if end < n and chars[end] == 59 {
+                let mut ent_chars: [i32] = [];
+                let mut j: i32 = i + 1;
+                while j < end {
+                    push(ent_chars, chars[j]);
+                    j += 1;
+                };
+                let entity: str = str_from_chars(ent_chars);
+                if str_eq(entity, "amp") {
+                    push(out, 38); i = end + 1;
+                } else if str_eq(entity, "lt") {
+                    push(out, 60); i = end + 1;
+                } else if str_eq(entity, "gt") {
+                    push(out, 62); i = end + 1;
+                } else if str_eq(entity, "quot") {
+                    push(out, 34); i = end + 1;
+                } else if str_eq(entity, "apos") {
+                    push(out, 39); i = end + 1;
+                } else if str_eq(entity, "nbsp") {
+                    push(out, 32); i = end + 1;
+                } else if str_eq(entity, "mdash") {
+                    push(out, 45); i = end + 1;
+                } else if str_eq(entity, "ndash") {
+                    push(out, 45); i = end + 1;
+                } else if str_eq(entity, "hellip") {
+                    push(out, 46); push(out, 46); push(out, 46); i = end + 1;
+                } else if str_starts_with(entity, "#x") {
+                    let hex: str = str_slice(entity, 2, str_len(entity));
+                    let code: i32 = xml_hex_to_i32(hex);
+                    if code > 0 { push(out, code); };
+                    i = end + 1;
+                } else if str_starts_with(entity, "#") {
+                    let num_str: str = str_slice(entity, 1, str_len(entity));
+                    let pr: Result<i32, str> = parse_i32(num_str);
+                    match pr {
+                        Result::Ok(code) => { push(out, code); },
+                        Result::Err(_e) => { push(out, 38); },
+                    };
+                    i = end + 1;
+                } else {
+                    push(out, 38); i += 1;
+                }
+            } else {
+                push(out, 38); i += 1;
+            }
+        } else {
+            push(out, chars[i]); i += 1;
+        };
+    };
+    str_from_chars(out)
+}
+
+fn! xml_hex_to_i32(s: str) -> i32 {
+    let chars: [i32] = str_to_chars(s);
+    let mut result: i32 = 0;
+    for ci in 0..len(chars) {
+        let c: i32 = chars[ci];
+        let mut digit: i32 = 0;
+        if c >= 48 and c <= 57 {
+            digit = c - 48;
+        } else if c >= 97 and c <= 102 {
+            digit = c - 97 + 10;
+        } else if c >= 65 and c <= 70 {
+            digit = c - 65 + 10;
+        };
+        result = result * 16 + digit;
+    };
+    result
+}
+
+// Strip CDATA wrapper: <![CDATA[...]]> -> ...
+fn! xml_strip_cdata(s: str) -> str {
+    let trimmed: str = str_trim(s);
+    if str_starts_with(trimmed, "<![CDATA[") {
+        let inner: str = str_slice(trimmed, 9, str_len(trimmed));
+        // Find ]]> at the end
+        let end_marker: i32 = str_find(inner, "]]>");
+        if end_marker >= 0 {
+            return str_slice(inner, 0, end_marker);
+        };
+        return inner;
+    };
+    trimmed
+}
+
+// Strip HTML tags from a string (for descriptions)
+fn! xml_strip_html(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let mut out: [i32] = [];
+    let mut in_tag: bool = false;
+    let sn: i32 = len(chars);
+    let mut si: i32 = 0;
+    while si < sn {
+        if chars[si] == 60 { // '<'
+            in_tag = true;
+        } else if chars[si] == 62 { // '>'
+            in_tag = false;
+        } else if not in_tag {
+            push(out, chars[si]);
+        };
+        si += 1;
+    };
+    str_from_chars(out)
+}
+
+// Extract content between <tag> and </tag>
+// Returns "" if tag not found. Handles tags with attributes like <link href="...">
+fn! xml_get_tag_content(xml: str, tag: str) -> str {
+    let open1: str = str_concat("<", str_concat(tag, ">"));
+    let open2: str = str_concat("<", str_concat(tag, " "));
+    let close_tag: str = str_concat("</", str_concat(tag, ">"));
+
+    // Try <tag> first
+    let mut start: i32 = str_find(xml, open1);
+    let mut content_start: i32 = 0;
+    if start >= 0 {
+        content_start = start + str_len(open1);
+    } else {
+        // Try <tag ...> (with attributes)
+        start = str_find(xml, open2);
+        if start < 0 {
+            return "";
+        };
+        // Find closing '>'
+        let rest_after: str = str_slice(xml, start, str_len(xml));
+        let gt: i32 = str_find(rest_after, ">");
+        if gt < 0 {
+            return "";
+        };
+        content_start = start + gt + 1;
+    };
+
+    let rest: str = str_slice(xml, content_start, str_len(xml));
+    let end: i32 = str_find(rest, close_tag);
+    if end < 0 {
+        return "";
+    };
+    let raw: str = str_slice(xml, content_start, content_start + end);
+    let stripped: str = xml_strip_cdata(raw);
+    xml_entity_decode(str_trim(stripped))
+}
+
+// Find all <item>...</item> blocks and return them as an array of strings
+fn! xml_find_items(xml: str) -> [str] {
+    let mut items: [str] = [];
+    let mut search_from: i32 = 0;
+    let xml_len: i32 = str_len(xml);
+
+    while search_from < xml_len {
+        let remaining: str = str_slice(xml, search_from, xml_len);
+        let item_start: i32 = str_find(remaining, "<item");
+        if item_start < 0 {
+            break;
+        };
+
+        // Find the actual '>' that closes the <item> or <item ...> tag
+        let after_item: str = str_slice(remaining, item_start, str_len(remaining));
+        let gt_pos: i32 = str_find(after_item, ">");
+        if gt_pos < 0 {
+            break;
+        };
+        let content_begin: i32 = search_from + item_start + gt_pos + 1;
+
+        let rest2: str = str_slice(xml, content_begin, xml_len);
+        let item_end: i32 = str_find(rest2, "</item>");
+        if item_end < 0 {
+            break;
+        };
+
+        let item_xml: str = str_slice(xml, content_begin, content_begin + item_end);
+        push(items, item_xml);
+        search_from = content_begin + item_end + 7;
+    };
+    items
+}
+
+// Parse an RSS feed XML string
+fn! rss_parse_channel(xml: str) -> RssChannel {
+    let title: str = xml_get_tag_content(xml, "title");
+    let link: str = xml_get_tag_content(xml, "link");
+    let description: str = xml_get_tag_content(xml, "description");
+    RssChannel {
+        title: title,
+        link: link,
+        description: description,
+    }
+}
+
+fn! rss_parse_item(item_xml: str) -> RssItem {
+    let title: str = xml_get_tag_content(item_xml, "title");
+    let link: str = xml_get_tag_content(item_xml, "link");
+    let raw_desc: str = xml_get_tag_content(item_xml, "description");
+    // Keep raw HTML for rich rendering; caller can strip if needed
+    let pub_date: str = xml_get_tag_content(item_xml, "pubDate");
+    let mut guid: str = xml_get_tag_content(item_xml, "guid");
+    // Fallback: use link as guid if guid is empty
+    if str_len(guid) == 0 {
+        guid = link;
+    };
+    RssItem {
+        title: title,
+        link: link,
+        description: raw_desc,
+        pub_date: pub_date,
+        guid: guid,
+    }
+}
+
+fn! rss_parse_items(xml: str) -> [RssItem] {
+    let item_blocks: [str] = xml_find_items(xml);
+    let mut items: [RssItem] = [];
+    for bi in 0..len(item_blocks) {
+        let item: RssItem = rss_parse_item(item_blocks[bi]);
+        push(items, item);
+    };
+    items
+}

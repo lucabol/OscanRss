@@ -1,0 +1,60 @@
+// Test URL parser for OscanRss
+
+use "../url.osc"
+
+fn! assert_eq_str(label: str, expected: str, actual: str) {
+    if str_eq(expected, actual) {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected='{expected}' got='{actual}'");
+    };
+}
+
+fn! assert_eq_i32(label: str, expected: i32, actual: i32) {
+    if expected == actual {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected={expected} got={actual}");
+    };
+}
+
+fn! main() {
+    println("=== URL Parser Tests ===");
+
+    // Test basic HTTP URL
+    let u1: Url = url_parse("http://example.com/feed");
+    assert_eq_str("u1_scheme", "http", u1.scheme);
+    assert_eq_str("u1_host", "example.com", u1.host);
+    assert_eq_i32("u1_port", 80, u1.port);
+    assert_eq_str("u1_path", "/feed", u1.path);
+
+    // Test HTTPS URL
+    let u2: Url = url_parse("https://example.com/rss/feed.xml");
+    assert_eq_str("u2_scheme", "https", u2.scheme);
+    assert_eq_str("u2_host", "example.com", u2.host);
+    assert_eq_i32("u2_port", 443, u2.port);
+    assert_eq_str("u2_path", "/rss/feed.xml", u2.path);
+
+    // Test URL with port
+    let u3: Url = url_parse("http://localhost:8080/api");
+    assert_eq_str("u3_host", "localhost", u3.host);
+    assert_eq_i32("u3_port", 8080, u3.port);
+    assert_eq_str("u3_path", "/api", u3.path);
+
+    // Test URL with no path
+    let u4: Url = url_parse("https://example.com");
+    assert_eq_str("u4_path", "/", u4.path);
+    assert_eq_str("u4_host", "example.com", u4.host);
+
+    // Test URL with fragment
+    let u5: Url = url_parse("http://example.com/page#section");
+    assert_eq_str("u5_path", "/page", u5.path);
+    assert_eq_str("u5_fragment", "section", u5.fragment);
+
+    // Test url_to_string
+    let u6: Url = url_parse("https://example.com/feed.xml");
+    let s6: str = url_to_string(u6);
+    assert_eq_str("u6_tostring", "https://example.com/feed.xml", s6);
+
+    println("=== Tests Complete ===");
+}

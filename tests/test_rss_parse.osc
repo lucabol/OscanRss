@@ -1,0 +1,105 @@
+// Test RSS parser for OscanRss
+
+use "../rss_parse.osc"
+
+fn! assert_eq_str(label: str, expected: str, actual: str) {
+    if str_eq(expected, actual) {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected='{expected}' got='{actual}'");
+    };
+}
+
+fn! assert_eq_i32(label: str, expected: i32, actual: i32) {
+    if expected == actual {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected={expected} got={actual}");
+    };
+}
+
+fn! main() {
+    println("=== RSS Parser Tests ===");
+
+    // Test XML entity decoding
+    let e1: str = xml_entity_decode("hello &amp; world");
+    assert_eq_str("entity_amp", "hello & world", e1);
+
+    let e2: str = xml_entity_decode("&lt;b&gt;bold&lt;/b&gt;");
+    assert_eq_str("entity_lt_gt", "<b>bold</b>", e2);
+
+    let e3: str = xml_entity_decode("no entities here");
+    assert_eq_str("entity_none", "no entities here", e3);
+
+    let e4: str = xml_entity_decode("&quot;quoted&quot;");
+    assert_eq_str("entity_quot", "\"quoted\"", e4);
+
+    // Test CDATA stripping
+    let c1: str = xml_strip_cdata("<![CDATA[hello world]]>");
+    assert_eq_str("cdata_strip", "hello world", c1);
+
+    let c2: str = xml_strip_cdata("no cdata");
+    assert_eq_str("cdata_passthrough", "no cdata", c2);
+
+    // Test HTML stripping
+    let h1: str = xml_strip_html("<p>Hello <b>world</b></p>");
+    assert_eq_str("html_strip", "Hello world", h1);
+
+    let h2: str = xml_strip_html("no tags");
+    assert_eq_str("html_strip_none", "no tags", h2);
+
+    // Test tag content extraction
+    let xml1: str = "<title>My Blog</title>";
+    let t1: str = xml_get_tag_content(xml1, "title");
+    assert_eq_str("tag_title", "My Blog", t1);
+
+    let xml2: str = "<item><title>Post 1</title><link>http://example.com</link><description>desc</description></item>";
+    let t2: str = xml_get_tag_content(xml2, "title");
+    assert_eq_str("tag_item_title", "Post 1", t2);
+
+    let t3: str = xml_get_tag_content(xml2, "link");
+    assert_eq_str("tag_item_link", "http://example.com", t3);
+
+    let t4: str = xml_get_tag_content(xml2, "description");
+    assert_eq_str("tag_item_desc", "desc", t4);
+
+    // Test missing tag
+    let t5: str = xml_get_tag_content(xml2, "author");
+    assert_eq_str("tag_missing", "", t5);
+
+    // Test item finding
+    let rss: str = "<rss><channel><item><title>A</title></item><item><title>B</title></item><item><title>C</title></item></channel></rss>";
+    let items: [str] = xml_find_items(rss);
+    assert_eq_i32("items_count", 3, len(items));
+
+    let it1_title: str = xml_get_tag_content(items[0], "title");
+    assert_eq_str("item_0_title", "A", it1_title);
+
+    let it2_title: str = xml_get_tag_content(items[1], "title");
+    assert_eq_str("item_1_title", "B", it2_title);
+
+    let it3_title: str = xml_get_tag_content(items[2], "title");
+    assert_eq_str("item_2_title", "C", it3_title);
+
+    // Test full RSS parsing
+    let full_rss: str = "<rss version=\"2.0\"><channel><title>Test Feed</title><link>http://test.com</link><description>A test feed</description><item><title>First Post</title><link>http://test.com/1</link><description>Hello world</description><pubDate>Mon, 21 Apr 2025</pubDate><guid>guid-001</guid></item><item><title>Second Post</title><link>http://test.com/2</link><description>&lt;p&gt;HTML content&lt;/p&gt;</description><pubDate>Sun, 20 Apr 2025</pubDate><guid>guid-002</guid></item></channel></rss>";
+
+    let channel: RssChannel = rss_parse_channel(full_rss);
+    assert_eq_str("channel_title", "Test Feed", channel.title);
+    assert_eq_str("channel_link", "http://test.com", channel.link);
+
+    let parsed_items: [RssItem] = rss_parse_items(full_rss);
+    assert_eq_i32("parsed_count", 2, len(parsed_items));
+    assert_eq_str("parsed_0_title", "First Post", parsed_items[0].title);
+    assert_eq_str("parsed_0_guid", "guid-001", parsed_items[0].guid);
+    assert_eq_str("parsed_1_title", "Second Post", parsed_items[1].title);
+    assert_eq_str("parsed_1_link", "http://test.com/2", parsed_items[1].link);
+
+    // Test guid fallback to link
+    let no_guid_rss: str = "<rss><channel><item><title>No Guid</title><link>http://test.com/3</link><description>desc</description></item></channel></rss>";
+    let ng_items: [RssItem] = rss_parse_items(no_guid_rss);
+    assert_eq_i32("no_guid_count", 1, len(ng_items));
+    assert_eq_str("guid_fallback", "http://test.com/3", ng_items[0].guid);
+
+    println("=== Tests Complete ===");
+}

@@ -1,0 +1,148 @@
+// Persistent flat-file storage for OscanRss
+// Stores groups, feeds, and read state in %APPDATA% or $HOME.
+// Pipe-delimited format. Silently no-ops on errors.
+
+use "types.osc"
+
+fn! storage_dir() -> str {
+    let appdata: Result<str, str> = env_get("APPDATA");
+    match appdata {
+        Result::Ok(v) => { return v; },
+        Result::Err(_e) => {},
+    };
+    let home: Result<str, str> = env_get("HOME");
+    match home {
+        Result::Ok(v) => { return v; },
+        Result::Err(_e2) => {},
+    };
+    "."
+}
+
+fn! storage_path(filename: str) -> str {
+    let dir: str = storage_dir();
+    str_concat(str_concat(dir, "/"), filename)
+}
+
+fn! storage_load_lines(filename: str) -> [str] {
+    let mut result: [str] = [];
+    let path: str = storage_path(filename);
+    let r: Result<str, str> = read_file(path);
+    let mut body: str = "";
+    match r {
+        Result::Ok(s) => { body = s; },
+        Result::Err(_e3) => { return result; },
+    };
+    if str_len(body) == 0 { return result; };
+    let parts: [str] = str_split(body, "\n");
+    for pi in 0..len(parts) {
+        let line: str = str_trim(parts[pi]);
+        if str_len(line) > 0 {
+            push(result, line);
+        };
+    };
+    result
+}
+
+fn! storage_save_lines(filename: str, lines: [str]) {
+    let path: str = storage_path(filename);
+    let body: str = str_join(lines, "\n");
+    let _r: Result<str, str> = write_file(path, body);
+}
+
+// --- Groups persistence ---
+// Format: id|name|expanded
+
+fn! storage_save_groups(groups: [FeedGroup]) {
+    let mut lines: [str] = [];
+    for gi in 0..len(groups) {
+        let g: FeedGroup = groups[gi];
+        let exp_str: str = if g.expanded { "1" } else { "0" };
+        let line: str = "{g.id}|{g.name}|{exp_str}";
+        push(lines, line);
+    };
+    storage_save_lines("oscanrss_groups.txt", lines);
+}
+
+fn! storage_load_groups(groups: [FeedGroup]) {
+    let lines: [str] = storage_load_lines("oscanrss_groups.txt");
+    for li in 0..len(lines) {
+        let parts: [str] = str_split(lines[li], "|");
+        if len(parts) >= 3 {
+            let id_result: Result<i32, str> = parse_i32(parts[0]);
+            let mut gid: i32 = -1;
+            match id_result {
+                Result::Ok(v) => { gid = v; },
+                Result::Err(_e4) => {},
+            };
+            if gid >= 0 {
+                let gname: str = parts[1];
+                let expanded: bool = str_eq(parts[2], "1");
+                let group: FeedGroup = FeedGroup {
+                    id: gid,
+                    name: gname,
+                    expanded: expanded,
+                };
+                push(groups, group);
+            };
+        };
+    };
+}
+
+// --- Feeds persistence ---
+// Format: id|group_id|name|url
+
+fn! storage_save_feeds(feeds: [Feed]) {
+    let mut lines: [str] = [];
+    for fi in 0..len(feeds) {
+        let f: Feed = feeds[fi];
+        let line: str = "{f.id}|{f.group_id}|{f.name}|{f.url}";
+        push(lines, line);
+    };
+    storage_save_lines("oscanrss_feeds.txt", lines);
+}
+
+fn! storage_load_feeds(feeds: [Feed]) {
+    let lines: [str] = storage_load_lines("oscanrss_feeds.txt");
+    for li2 in 0..len(lines) {
+        let parts: [str] = str_split(lines[li2], "|");
+        if len(parts) >= 4 {
+            let id_result: Result<i32, str> = parse_i32(parts[0]);
+            let mut fid: i32 = -1;
+            match id_result {
+                Result::Ok(v) => { fid = v; },
+                Result::Err(_e5) => {},
+            };
+            let gid_result: Result<i32, str> = parse_i32(parts[1]);
+            let mut fgid: i32 = -1;
+            match gid_result {
+                Result::Ok(v2) => { fgid = v2; },
+                Result::Err(_e6) => {},
+            };
+            if fid >= 0 and fgid >= 0 {
+                let fname: str = parts[2];
+                let furl: str = parts[3];
+                let feed: Feed = Feed {
+                    id: fid,
+                    group_id: fgid,
+                    name: fname,
+                    url: furl,
+                };
+                push(feeds, feed);
+            };
+        };
+    };
+}
+
+// --- Read state persistence ---
+// One GUID per line
+
+fn! storage_save_read(guid_list: [str]) {
+    storage_save_lines("oscanrss_read.txt", guid_list);
+}
+
+fn! storage_load_read(read_guids: map) {
+    let lines: [str] = storage_load_lines("oscanrss_read.txt");
+    for ri in 0..len(lines) {
+        map_set(read_guids, lines[ri], "1");
+    };
+}

@@ -1,0 +1,907 @@
+// html_render.osc — HTML parser and simplified renderer for RSS content
+// Parser adapted from OscanWeb (github.com/lucabol/oscanweb)
+// Renderer is a simplified version suitable for RSS article display.
+
+// ─── DOM Node ────────────────────────────────────────────
+
+struct HtmlNode {
+    tag: str,
+    text: str,
+    attrs: map,
+    first_child: i32,
+    next_sibling: i32,
+    is_text: bool,
+}
+
+fn! html_node_text(content: str) -> HtmlNode {
+    HtmlNode {
+        tag: "", text: content, attrs: map_new(),
+        first_child: -1, next_sibling: -1, is_text: true,
+    }
+}
+
+fn! html_node_element(tag_name: str, attributes: map) -> HtmlNode {
+    HtmlNode {
+        tag: tag_name, text: "", attrs: attributes,
+        first_child: -1, next_sibling: -1, is_text: false,
+    }
+}
+
+fn! html_get_attr(node: HtmlNode, name: str) -> str {
+    if map_has(node.attrs, name) {
+        map_get(node.attrs, name)
+    } else {
+        ""
+    }
+}
+
+fn! html_append_child(nodes: [HtmlNode], parent_idx: i32, child_idx: i32) {
+    if nodes[parent_idx].first_child == -1 {
+        nodes[parent_idx].first_child = child_idx;
+    } else {
+        let mut sib: i32 = nodes[parent_idx].first_child;
+        while nodes[sib].next_sibling != -1 {
+            sib = nodes[sib].next_sibling;
+        };
+        nodes[sib].next_sibling = child_idx;
+    };
+}
+
+fn! html_get_text_content(nodes: [HtmlNode], idx: i32) -> str {
+    let node: HtmlNode = nodes[idx];
+    if node.is_text {
+        return node.text;
+    };
+    let mut result: str = "";
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        let ct: str = html_get_text_content(nodes, child);
+        if str_len(ct) > 0 {
+            if str_len(result) > 0 {
+                result = str_concat(result, " ");
+            };
+            result = str_concat(result, ct);
+        };
+        child = nodes[child].next_sibling;
+    };
+    result
+}
+
+// ─── Entity Decoding ─────────────────────────────────────
+
+fn! html_hex_val(s: str) -> i32 {
+    let chars: [i32] = str_to_chars(s);
+    let mut result: i32 = 0;
+    for hx in 0..len(chars) {
+        let c: i32 = chars[hx];
+        let mut digit: i32 = 0;
+        if c >= 48 and c <= 57 { digit = c - 48; }
+        else if c >= 97 and c <= 102 { digit = c - 87; }
+        else if c >= 65 and c <= 70 { digit = c - 55; };
+        result = result * 16 + digit;
+    };
+    result
+}
+
+fn! html_entity_decode(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let mut out: [i32] = [];
+    let mut i: i32 = 0;
+    let n: i32 = len(chars);
+    while i < n {
+        if chars[i] == 38 {
+            let mut end: i32 = i + 1;
+            while end < n and chars[end] != 59 and end - i < 10 {
+                end += 1;
+            };
+            if end < n and chars[end] == 59 {
+                let mut ent_ch: [i32] = [];
+                let mut j: i32 = i + 1;
+                while j < end { push(ent_ch, chars[j]); j += 1; };
+                let entity: str = str_from_chars(ent_ch);
+                if str_eq(entity, "amp") { push(out, 38); i = end + 1; }
+                else if str_eq(entity, "lt") { push(out, 60); i = end + 1; }
+                else if str_eq(entity, "gt") { push(out, 62); i = end + 1; }
+                else if str_eq(entity, "quot") { push(out, 34); i = end + 1; }
+                else if str_eq(entity, "apos") { push(out, 39); i = end + 1; }
+                else if str_eq(entity, "nbsp") { push(out, 32); i = end + 1; }
+                else if str_eq(entity, "mdash") { push(out, 8212); i = end + 1; }
+                else if str_eq(entity, "ndash") { push(out, 8211); i = end + 1; }
+                else if str_eq(entity, "hellip") { push(out, 8230); i = end + 1; }
+                else if str_eq(entity, "copy") { push(out, 169); i = end + 1; }
+                else if str_eq(entity, "reg") { push(out, 174); i = end + 1; }
+                else if str_eq(entity, "bull") { push(out, 8226); i = end + 1; }
+                else if str_starts_with(entity, "#x") {
+                    let hex: str = str_slice(entity, 2, str_len(entity));
+                    let code: i32 = html_hex_val(hex);
+                    if code > 0 { push(out, code); };
+                    i = end + 1;
+                } else if str_starts_with(entity, "#") {
+                    let num_str: str = str_slice(entity, 1, str_len(entity));
+                    let pr: Result<i32, str> = parse_i32(num_str);
+                    match pr {
+                        Result::Ok(code) => { push(out, code); },
+                        Result::Err(_e) => { push(out, 38); },
+                    };
+                    i = end + 1;
+                } else { push(out, 38); i += 1; }
+            } else { push(out, 38); i += 1; }
+        } else { push(out, chars[i]); i += 1; };
+    };
+    str_from_chars(out)
+}
+
+// ─── Void element check ─────────────────────────────────
+
+fn html_is_void(tag: str) -> bool {
+    str_eq(tag, "br") or str_eq(tag, "hr") or str_eq(tag, "img") or
+    str_eq(tag, "input") or str_eq(tag, "meta") or str_eq(tag, "link") or
+    str_eq(tag, "col") or str_eq(tag, "area") or str_eq(tag, "base") or
+    str_eq(tag, "embed") or str_eq(tag, "source") or str_eq(tag, "wbr")
+}
+
+// ─── HTML Parser (from OscanWeb) ─────────────────────────
+
+fn! html_parse(nodes: [HtmlNode], source: str) -> i32 {
+    let chars: [i32] = str_to_chars(source);
+    let n: i32 = len(chars);
+    let mut i: i32 = 0;
+    let root: HtmlNode = html_node_element("root", map_new());
+    push(nodes, root);
+    let root_idx: i32 = len(nodes) - 1;
+    let mut stack: [i32] = [];
+    push(stack, root_idx);
+    let mut text_buf: [i32] = [];
+
+    while i < n {
+        let c: i32 = chars[i];
+        if c == 60 {
+            // Flush text
+            if len(text_buf) > 0 {
+                let raw_text: str = str_from_chars(text_buf);
+                let decoded: str = html_entity_decode(raw_text);
+                let trimmed: str = str_trim(decoded);
+                if str_len(trimmed) > 0 {
+                    let tnode: HtmlNode = html_node_text(decoded);
+                    push(nodes, tnode);
+                    let tidx: i32 = len(nodes) - 1;
+                    let parent: i32 = stack[len(stack) - 1];
+                    html_append_child(nodes, parent, tidx);
+                };
+                text_buf = [];
+            };
+            i += 1;
+            if i >= n { break; };
+
+            // Comment
+            if i + 2 < n and chars[i] == 33 and chars[i+1] == 45 and chars[i+2] == 45 {
+                i += 3;
+                while i + 2 < n {
+                    if chars[i] == 45 and chars[i+1] == 45 and chars[i+2] == 62 {
+                        i += 3; break;
+                    };
+                    i += 1;
+                };
+                continue;
+            };
+            // DOCTYPE
+            if chars[i] == 33 {
+                while i < n and chars[i] != 62 { i += 1; };
+                if i < n { i += 1; };
+                continue;
+            };
+            // End tag
+            if chars[i] == 47 {
+                i += 1;
+                let mut end_tag_ch: [i32] = [];
+                while i < n and chars[i] != 62 and not char_is_space(chars[i]) {
+                    push(end_tag_ch, char_to_lower(chars[i]));
+                    i += 1;
+                };
+                while i < n and chars[i] != 62 { i += 1; };
+                if i < n { i += 1; };
+                let end_tag: str = str_from_chars(end_tag_ch);
+                let mut found: i32 = -1;
+                let mut si: i32 = len(stack) - 1;
+                while si > 0 {
+                    if str_eq(nodes[stack[si]].tag, end_tag) { found = si; break; };
+                    si -= 1;
+                };
+                if found > 0 {
+                    while len(stack) > found { pop(stack); };
+                };
+                continue;
+            };
+            // Start tag
+            let mut tag_ch: [i32] = [];
+            while i < n and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                push(tag_ch, char_to_lower(chars[i]));
+                i += 1;
+            };
+            let tag_name: str = str_from_chars(tag_ch);
+            let tag_attrs: map = map_new();
+            let mut is_self_closing: bool = false;
+            while i < n and chars[i] != 62 {
+                if chars[i] == 47 { is_self_closing = true; i += 1; continue; };
+                if char_is_space(chars[i]) { i += 1; continue; };
+                let mut attr_nm: [i32] = [];
+                while i < n and chars[i] != 61 and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                    push(attr_nm, char_to_lower(chars[i])); i += 1;
+                };
+                let attr_name: str = str_from_chars(attr_nm);
+                let mut attr_value: str = "";
+                while i < n and char_is_space(chars[i]) { i += 1; };
+                if i < n and chars[i] == 61 {
+                    i += 1;
+                    while i < n and char_is_space(chars[i]) { i += 1; };
+                    if i < n and (chars[i] == 34 or chars[i] == 39) {
+                        let quote: i32 = chars[i]; i += 1;
+                        let mut val_ch: [i32] = [];
+                        while i < n and chars[i] != quote {
+                            push(val_ch, chars[i]); i += 1;
+                        };
+                        if i < n { i += 1; };
+                        attr_value = str_from_chars(val_ch);
+                    } else {
+                        let mut val_ch2: [i32] = [];
+                        while i < n and chars[i] != 62 and chars[i] != 47 and not char_is_space(chars[i]) {
+                            push(val_ch2, chars[i]); i += 1;
+                        };
+                        attr_value = str_from_chars(val_ch2);
+                    };
+                };
+                if str_len(attr_name) > 0 {
+                    map_set(tag_attrs, attr_name, html_entity_decode(attr_value));
+                };
+            };
+            if i < n and chars[i] == 62 { i += 1; };
+
+            // Auto-close <p> on nested <p>
+            if str_eq(tag_name, "p") {
+                let top_tag: str = nodes[stack[len(stack) - 1]].tag;
+                if str_eq(top_tag, "p") { pop(stack); };
+            };
+            // Auto-close <li>
+            if str_eq(tag_name, "li") {
+                let mut ac: i32 = len(stack) - 1;
+                while ac > 0 {
+                    let ac_tag: str = nodes[stack[ac]].tag;
+                    if str_eq(ac_tag, "ul") or str_eq(ac_tag, "ol") { break; };
+                    if str_eq(ac_tag, "li") {
+                        while len(stack) > ac { pop(stack); };
+                        break;
+                    };
+                    ac = ac - 1;
+                };
+            };
+
+            let elem: HtmlNode = html_node_element(tag_name, tag_attrs);
+            push(nodes, elem);
+            let elem_idx: i32 = len(nodes) - 1;
+            let parent: i32 = stack[len(stack) - 1];
+            html_append_child(nodes, parent, elem_idx);
+
+            if not html_is_void(tag_name) and not is_self_closing {
+                push(stack, elem_idx);
+                // Raw text elements: <script> and <style>
+                if str_eq(tag_name, "script") or str_eq(tag_name, "style") {
+                    let close_str: str = str_concat("</", str_concat(tag_name, ">"));
+                    let close_chars: [i32] = str_to_chars(close_str);
+                    let close_len: i32 = len(close_chars);
+                    let mut raw_buf: [i32] = [];
+                    let mut found_close: bool = false;
+                    while i < n and not found_close {
+                        if chars[i] == 60 and i + close_len <= n {
+                            let mut match_ok: bool = true;
+                            let mut mi: i32 = 0;
+                            while mi < close_len {
+                                let src_ch: i32 = char_to_lower(chars[i + mi]);
+                                if src_ch != close_chars[mi] { match_ok = false; break; };
+                                mi += 1;
+                            };
+                            if match_ok {
+                                found_close = true; i += close_len;
+                            } else { push(raw_buf, chars[i]); i += 1; };
+                        } else { push(raw_buf, chars[i]); i += 1; };
+                    };
+                    pop(stack);
+                };
+            };
+        } else {
+            push(text_buf, c);
+            i += 1;
+        };
+    };
+
+    // Flush remaining text
+    if len(text_buf) > 0 {
+        let raw_text: str = str_from_chars(text_buf);
+        let decoded: str = html_entity_decode(raw_text);
+        let trimmed: str = str_trim(decoded);
+        if str_len(trimmed) > 0 {
+            let tnode: HtmlNode = html_node_text(decoded);
+            push(nodes, tnode);
+            let tidx: i32 = len(nodes) - 1;
+            let parent: i32 = stack[len(stack) - 1];
+            html_append_child(nodes, parent, tidx);
+        };
+    };
+    root_idx
+}
+
+// ─── Simplified Renderer ─────────────────────────────────
+// Renders HTML content in a panel region with basic formatting.
+// Supports clickable links and inline images.
+
+// Clickable link region collected during rendering
+struct LinkRegion {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    href: str,
+}
+
+// Colors for HTML rendering
+let HR_FG: i32 = 220 * 65536 + 220 * 256 + 220;
+let HR_BOLD: i32 = 255 * 65536 + 255 * 256 + 220;
+let HR_EM: i32 = 255 * 65536 + 230 * 256 + 180;
+let HR_LINK: i32 = 100 * 65536 + 149 * 256 + 237;
+let HR_CODE: i32 = 180 * 65536 + 220 * 256 + 180;
+let HR_H1: i32 = 255 * 65536 + 255 * 256 + 255;
+let HR_H2: i32 = 220 * 65536 + 220 * 256 + 240;
+let HR_H3: i32 = 200 * 65536 + 200 * 256 + 220;
+let HR_DIM: i32 = 130 * 65536 + 130 * 256 + 130;
+let HR_QUOTE: i32 = 160 * 65536 + 170 * 256 + 190;
+let HR_QUOTE_BAR: i32 = 80 * 65536 + 120 * 256 + 200;
+let HR_RULE: i32 = 80 * 65536 + 80 * 256 + 85;
+let HR_PRE_BG: i32 = 45 * 65536 + 45 * 256 + 50;
+let HR_BULLET: i32 = 180 * 65536 + 180 * 256 + 180;
+let HR_LINE_H: i32 = 14;
+let HR_IMG_MAX_W: i32 = 800;
+
+fn hr_is_skip_tag(tag: str) -> bool {
+    str_eq(tag, "script") or str_eq(tag, "style") or str_eq(tag, "head") or
+    str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
+    str_eq(tag, "noscript") or str_eq(tag, "iframe") or str_eq(tag, "svg") or
+    str_eq(tag, "nav") or str_eq(tag, "footer")
+}
+
+fn hr_is_block_tag(tag: str) -> bool {
+    str_eq(tag, "p") or str_eq(tag, "div") or str_eq(tag, "h1") or
+    str_eq(tag, "h2") or str_eq(tag, "h3") or str_eq(tag, "h4") or
+    str_eq(tag, "h5") or str_eq(tag, "h6") or str_eq(tag, "blockquote") or
+    str_eq(tag, "pre") or str_eq(tag, "ul") or str_eq(tag, "ol") or
+    str_eq(tag, "li") or str_eq(tag, "hr") or str_eq(tag, "br") or
+    str_eq(tag, "table") or str_eq(tag, "tr") or str_eq(tag, "section") or
+    str_eq(tag, "article") or str_eq(tag, "header") or str_eq(tag, "figure") or
+    str_eq(tag, "figcaption") or str_eq(tag, "dl") or str_eq(tag, "dt") or
+    str_eq(tag, "dd")
+}
+
+// Normalize whitespace: collapse runs of spaces/newlines to single space
+fn! hr_normalize(text: str) -> str {
+    let chars: [i32] = str_to_chars(text);
+    let mut out: [i32] = [];
+    let mut in_space: bool = false;
+    for ni in 0..len(chars) {
+        let c: i32 = chars[ni];
+        if c == 10 or c == 13 or c == 9 or c == 32 {
+            if not in_space and len(out) > 0 {
+                push(out, 32);
+                in_space = true;
+            };
+        } else {
+            push(out, c);
+            in_space = false;
+        };
+    };
+    str_from_chars(out)
+}
+
+// Render word-wrapped text, collecting link regions if in a link
+fn! hr_render_text(text: str, x_ptr: [i32], y_ptr: [i32],
+                   color: i32, px: i32, max_x: i32,
+                   min_y: i32, max_y: i32,
+                   is_link: bool, link_href: str,
+                   links: [LinkRegion]) {
+    let normalized: str = hr_normalize(text);
+    if str_len(str_trim(normalized)) == 0 { return; };
+    let words: [str] = str_split(normalized, " ");
+    for wi in 0..len(words) {
+        let word: str = words[wi];
+        if str_len(word) == 0 { continue; };
+        let word_w: i32 = str_len(word) * 8;
+        // Wrap to next line if needed
+        if x_ptr[0] + word_w > max_x and x_ptr[0] > px {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H;
+            x_ptr[0] = px;
+        };
+        // Draw if visible
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_draw_text(x_ptr[0], y_ptr[0], word, color, 0);
+            // Underline for links
+            if is_link {
+                gfx_line(x_ptr[0], y_ptr[0] + 10, x_ptr[0] + word_w, y_ptr[0] + 10, color);
+            };
+        };
+        // Register link region for each word
+        if is_link and y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            let lr: LinkRegion = LinkRegion {
+                x: x_ptr[0], y: y_ptr[0],
+                w: word_w, h: HR_LINE_H,
+                href: link_href,
+            };
+            push(links, lr);
+        };
+        x_ptr[0] = x_ptr[0] + word_w + 8;
+    };
+}
+
+// Render pre-formatted text (preserve whitespace and line breaks)
+fn! hr_render_pre(text: str, x_ptr: [i32], y_ptr: [i32],
+                  color: i32, px: i32, min_y: i32, max_y: i32) {
+    let lines: [str] = str_split(text, "\n");
+    for pli in 0..len(lines) {
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_draw_text(px + 8, y_ptr[0], lines[pli], color, 0);
+        };
+        y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        x_ptr[0] = px;
+    };
+}
+
+// Nearest-neighbor downscale
+fn! hr_img_scale(src_px: [i32], src_w: i32, src_h: i32, dst_w: i32, dst_h: i32) -> [i32] {
+    let mut dst: [i32] = [];
+    for dy in 0..dst_h {
+        let sy: i32 = dy * src_h / dst_h;
+        for dx in 0..dst_w {
+            let sx: i32 = dx * src_w / dst_w;
+            push(dst, src_px[sy * src_w + sx]);
+        };
+    };
+    dst
+}
+
+// Fetch, decode, and cache an image. Returns cache index or -1.
+fn! hr_img_fetch(src: str,
+                 img_cache_idx: map, img_cache_data: [[i32]],
+                 img_cache_w: [i32], img_cache_h: [i32]) -> i32 {
+    // Check cache
+    if map_has(img_cache_idx, src) {
+        let idx_str: str = map_get(img_cache_idx, src);
+        let pr: Result<i32, str> = parse_i32(idx_str);
+        match pr {
+            Result::Ok(cached) => { return cached; },
+            Result::Err(_ep) => { return -1; },
+        };
+    };
+
+    // Skip data: URLs and anchors
+    if str_starts_with(src, "data:") or str_starts_with(src, "#") {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Resolve URL and fetch (with redirect following)
+    let u: Url = url_parse(src);
+    if str_len(u.host) == 0 {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+    let response: HttpResponse = http_fetch_url(src, 5);
+    if str_len(response.error) > 0 or not response.ok {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Detect SVG by extension or content-type
+    let is_svg: bool = str_ends_with(src, ".svg") or str_contains(response.content_type, "svg");
+
+    // Decode image
+    let mut decode_ok: bool = false;
+    let mut pixels: [i32] = [];
+    let mut img_w: i32 = 0;
+    let mut img_h: i32 = 0;
+
+    if is_svg {
+        let svg_result: Result<[i32], str> = svg_load(response.body, HR_IMG_MAX_W, 600);
+        match svg_result {
+            Result::Ok(px_data) => {
+                if len(px_data) >= 2 {
+                    img_w = px_data[0];
+                    img_h = px_data[1];
+                    // Strip w/h header
+                    for svi in 2..len(px_data) {
+                        push(pixels, px_data[svi]);
+                    };
+                    decode_ok = true;
+                };
+            },
+            Result::Err(_es) => {},
+        };
+    } else {
+        let img_result: Result<[i32], str> = img_load(response.body);
+        match img_result {
+            Result::Ok(px_data) => {
+                if len(px_data) >= 2 {
+                    img_w = px_data[0];
+                    img_h = px_data[1];
+                    // Strip w/h header
+                    for imi in 2..len(px_data) {
+                        push(pixels, px_data[imi]);
+                    };
+                    decode_ok = true;
+                };
+            },
+            Result::Err(_ei) => {},
+        };
+    };
+
+    if not decode_ok or img_w <= 0 or img_h <= 0 {
+        map_set(img_cache_idx, src, "-1");
+        return -1;
+    };
+
+    // Downscale if too wide
+    if img_w > HR_IMG_MAX_W {
+        let new_h: i32 = img_h * HR_IMG_MAX_W / img_w;
+        if new_h > 0 {
+            pixels = hr_img_scale(pixels, img_w, img_h, HR_IMG_MAX_W, new_h);
+            img_w = HR_IMG_MAX_W;
+            img_h = new_h;
+        };
+    };
+
+    // Store in cache
+    let cache_idx: i32 = len(img_cache_data);
+    push(img_cache_data, pixels);
+    push(img_cache_w, img_w);
+    push(img_cache_h, img_h);
+    map_set(img_cache_idx, src, i32_to_str(cache_idx));
+    cache_idx
+}
+
+// Resolve a (possibly relative) URL against a base URL.
+// Handles: absolute (scheme://...), protocol-relative (//host/...),
+// root-relative (/path), and relative (path) URLs.
+fn! hr_resolve_url(src: str, base: str) -> str {
+    if str_len(src) == 0 { return src; };
+    if str_contains(src, "://") { return src; };
+    if str_starts_with(src, "//") { return "https:{src}"; };
+    if str_len(base) == 0 { return src; };
+    let bu: Url = url_parse(base);
+    if str_len(bu.host) == 0 { return src; };
+    if str_starts_with(src, "/") {
+        return "{bu.scheme}://{bu.host}{src}";
+    };
+    // Relative path: combine with the directory part of base.path
+    let bp: str = bu.path;
+    let mut dir: str = "/";
+    let mut last_slash: i32 = -1;
+    let bp_chars: [i32] = str_to_chars(bp);
+    for bi in 0..len(bp_chars) {
+        if bp_chars[bi] == 47 { last_slash = bi; };
+    };
+    if last_slash >= 0 {
+        dir = str_slice(bp, 0, last_slash + 1);
+    };
+    "{bu.scheme}://{bu.host}{dir}{src}"
+}
+
+// Main recursive renderer — now with links and images
+fn! hr_render_node(nodes: [HtmlNode], idx: i32,
+                   x_ptr: [i32], y_ptr: [i32],
+                   color: i32, px: i32, max_x: i32,
+                   min_y: i32, max_y: i32,
+                   indent: i32, in_pre: bool,
+                   ol_counter: [i32],
+                   is_link: bool, link_href: str,
+                   links: [LinkRegion],
+                   img_cache_idx: map, img_cache_data: [[i32]],
+                   img_cache_w: [i32], img_cache_h: [i32],
+                   base_url: str) {
+    let node: HtmlNode = nodes[idx];
+
+    // Text node
+    if node.is_text {
+        if in_pre {
+            hr_render_pre(node.text, x_ptr, y_ptr, color, px + indent, min_y, max_y);
+        } else {
+            hr_render_text(node.text, x_ptr, y_ptr, color, px + indent, max_x,
+                           min_y, max_y, is_link, link_href, links);
+        };
+        return;
+    };
+
+    // Element node
+    let tag: str = node.tag;
+    if hr_is_skip_tag(tag) { return; };
+
+    let is_block: bool = hr_is_block_tag(tag);
+
+    // Block element: start on new line
+    if is_block and x_ptr[0] > px + indent {
+        y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        x_ptr[0] = px + indent;
+    };
+
+    // Tag-specific pre-spacing and styling
+    let mut child_color: i32 = color;
+    let mut child_indent: i32 = indent;
+    let mut child_pre: bool = in_pre;
+    let mut child_is_link: bool = is_link;
+    let mut child_href: str = link_href;
+
+    // Headings
+    if str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3") {
+        y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        if str_eq(tag, "h1") { child_color = HR_H1; }
+        else if str_eq(tag, "h2") { child_color = HR_H2; }
+        else { child_color = HR_H3; };
+    };
+    if str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
+        child_color = HR_H3;
+    };
+
+    // Paragraph spacing
+    if str_eq(tag, "p") {
+        y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+    };
+
+    // Bold/strong
+    if str_eq(tag, "b") or str_eq(tag, "strong") {
+        child_color = HR_BOLD;
+    };
+
+    // Italic/emphasis
+    if str_eq(tag, "em") or str_eq(tag, "i") or str_eq(tag, "cite") {
+        child_color = HR_EM;
+    };
+
+    // Code
+    if str_eq(tag, "code") or str_eq(tag, "kbd") or str_eq(tag, "samp") or str_eq(tag, "tt") {
+        child_color = HR_CODE;
+    };
+
+    // Pre (code block)
+    if str_eq(tag, "pre") {
+        child_pre = true;
+        child_color = HR_CODE;
+        y_ptr[0] = y_ptr[0] + 4;
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_fill_rect(px + indent, y_ptr[0] - 2, max_x - px - indent, HR_LINE_H, HR_PRE_BG);
+        };
+    };
+
+    // Link — track href for children
+    if str_eq(tag, "a") {
+        child_color = HR_LINK;
+        child_is_link = true;
+        child_href = hr_resolve_url(html_get_attr(node, "href"), base_url);
+    };
+
+    // Blockquote
+    if str_eq(tag, "blockquote") {
+        child_indent = indent + 16;
+        child_color = HR_QUOTE;
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_fill_rect(px + indent + 4, y_ptr[0], 3, HR_LINE_H * 3, HR_QUOTE_BAR);
+        };
+        y_ptr[0] = y_ptr[0] + 2;
+    };
+
+    // HR
+    if str_eq(tag, "hr") {
+        y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_line(px + indent, y_ptr[0], max_x - 8, y_ptr[0], HR_RULE);
+        };
+        y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        x_ptr[0] = px + indent;
+        return;
+    };
+
+    // BR
+    if str_eq(tag, "br") {
+        y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        x_ptr[0] = px + indent;
+        return;
+    };
+
+    // Lists
+    if str_eq(tag, "ul") or str_eq(tag, "ol") {
+        child_indent = indent + 16;
+        if str_eq(tag, "ol") {
+            ol_counter[0] = 0;
+        };
+    };
+
+    // List item
+    if str_eq(tag, "li") {
+        y_ptr[0] = y_ptr[0] + 2;
+        x_ptr[0] = px + indent;
+        if ol_counter[0] >= 0 {
+            ol_counter[0] = ol_counter[0] + 1;
+            let num_str: str = "{ol_counter[0]}.";
+            if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+                gfx_draw_text(px + indent - 16, y_ptr[0], num_str, HR_BULLET, 0);
+            };
+        } else {
+            if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+                gfx_draw_text(px + indent - 12, y_ptr[0], "*", HR_BULLET, 0);
+            };
+        };
+    };
+
+    // IMG — fetch, decode, cache, and blit inline
+    if str_eq(tag, "img") {
+        let src_raw: str = html_get_attr(node, "src");
+        let alt: str = html_get_attr(node, "alt");
+        let src: str = hr_resolve_url(src_raw, base_url);
+
+        if str_len(src) > 0 and str_contains(src, "://") {
+            let cache_hit: i32 = hr_img_fetch(src, img_cache_idx, img_cache_data,
+                                               img_cache_w, img_cache_h);
+            if cache_hit >= 0 and cache_hit < len(img_cache_data) {
+                let draw_w: i32 = img_cache_w[cache_hit];
+                let draw_h: i32 = img_cache_h[cache_hit];
+                let avail: i32 = max_x - px - indent;
+
+                // Scale to fit available width
+                let mut blit_w: i32 = draw_w;
+                let mut blit_h: i32 = draw_h;
+                let mut blit_pixels: [i32] = img_cache_data[cache_hit];
+                if blit_w > avail and avail > 0 {
+                    blit_h = blit_h * avail / blit_w;
+                    blit_w = avail;
+                    if blit_h > 0 {
+                        blit_pixels = hr_img_scale(img_cache_data[cache_hit],
+                                                    draw_w, draw_h, blit_w, blit_h);
+                    };
+                };
+
+                // Start on a new line
+                if x_ptr[0] > px + indent {
+                    y_ptr[0] = y_ptr[0] + HR_LINE_H;
+                    x_ptr[0] = px + indent;
+                };
+
+                // Blit if visible
+                if y_ptr[0] + blit_h >= min_y and y_ptr[0] < max_y and blit_h > 0 {
+                    gfx_blit(px + indent, y_ptr[0], blit_w, blit_h, blit_pixels);
+                };
+                y_ptr[0] = y_ptr[0] + blit_h + 4;
+                x_ptr[0] = px + indent;
+                return;
+            };
+        };
+
+        // Fallback: show alt text placeholder
+        let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
+        if y_ptr[0] >= min_y and y_ptr[0] < max_y {
+            gfx_draw_text(x_ptr[0], y_ptr[0], display, HR_DIM, 0);
+        };
+        x_ptr[0] = x_ptr[0] + str_len(display) * 8 + 8;
+        return;
+    };
+
+    // Strikethrough
+    if str_eq(tag, "del") or str_eq(tag, "s") or str_eq(tag, "strike") {
+        child_color = HR_DIM;
+    };
+
+    // Render children
+    let mut child: i32 = node.first_child;
+    while child != -1 {
+        hr_render_node(nodes, child, x_ptr, y_ptr,
+                       child_color, px, max_x, min_y, max_y,
+                       child_indent, child_pre, ol_counter,
+                       child_is_link, child_href, links,
+                       img_cache_idx, img_cache_data,
+                       img_cache_w, img_cache_h,
+                       base_url);
+        child = nodes[child].next_sibling;
+    };
+
+    // Block post-spacing
+    if is_block {
+        x_ptr[0] = px + indent;
+        if str_eq(tag, "p") {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        } else if str_eq(tag, "h1") or str_eq(tag, "h2") {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        } else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        } else if str_eq(tag, "li") {
+            y_ptr[0] = y_ptr[0] + 2;
+        } else if str_eq(tag, "pre") {
+            y_ptr[0] = y_ptr[0] + 4;
+        } else if str_eq(tag, "blockquote") {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H / 2;
+        } else {
+            y_ptr[0] = y_ptr[0] + HR_LINE_H;
+        };
+    };
+}
+
+// ─── Open URL in default browser ─────────────────────────
+
+fn! open_url_in_browser(url: str) {
+    // Windows
+    let os_env: Result<str, str> = env_get("OS");
+    let mut is_win: bool = false;
+    match os_env {
+        Result::Ok(v) => {
+            if str_eq(v, "Windows_NT") { is_win = true; };
+        },
+        Result::Err(_eo) => {},
+    };
+
+    if is_win {
+        // proc_spawn does NOT do PATH lookup, so resolve the absolute path
+        // to rundll32.exe first. rundll32 url.dll,FileProtocolHandler <url>
+        // is the canonical way to open a URL in the default handler on
+        // Windows and is immune to the quoting/& issues that plague `start`.
+        let exe_r: Result<str, str> = path_find_exec("rundll32.exe");
+        match exe_r {
+            Result::Ok(exe) => {
+                let _pid: i32 = proc_spawn(exe,
+                    ["url.dll,FileProtocolHandler", url]);
+            },
+            Result::Err(_e) => {},
+        };
+    } else {
+        // Try xdg-open (Linux), fall back to open (macOS)
+        let xdg: Result<str, str> = path_find_exec("xdg-open");
+        match xdg {
+            Result::Ok(xp) => {
+                let _pid2: i32 = proc_spawn(xp, [url]);
+            },
+            Result::Err(_ex) => {
+                let open_r: Result<str, str> = path_find_exec("open");
+                match open_r {
+                    Result::Ok(op) => { let _pid3: i32 = proc_spawn(op, [url]); },
+                    Result::Err(_) => {},
+                };
+            },
+        };
+    };
+}
+
+// ─── Public API ──────────────────────────────────────────
+
+// Parse and render HTML content in a rectangular region.
+// Collects clickable link regions into `links` array.
+// Uses image cache for inline images.
+// Returns the total content height (for scroll calculations).
+fn! html_render_content(html_source: str,
+                        panel_x: i32, panel_y: i32,
+                        panel_w: i32, panel_h: i32,
+                        scroll_y: i32,
+                        links: [LinkRegion],
+                        img_cache_idx: map, img_cache_data: [[i32]],
+                        img_cache_w: [i32], img_cache_h: [i32],
+                        base_url: str) -> i32 {
+    let mut nodes: [HtmlNode] = [];
+    let root: i32 = html_parse(nodes, html_source);
+
+    let x_ptr: [i32] = [panel_x + 8];
+    let y_ptr: [i32] = [panel_y + 4 - scroll_y];
+    let min_y: i32 = panel_y;
+    let max_y: i32 = panel_y + panel_h;
+    let max_x: i32 = panel_x + panel_w - 8;
+    let ol_counter: [i32] = [-1];
+
+    hr_render_node(nodes, root, x_ptr, y_ptr,
+                   HR_FG, panel_x + 8, max_x, min_y, max_y,
+                   0, false, ol_counter,
+                   false, "", links,
+                   img_cache_idx, img_cache_data,
+                   img_cache_w, img_cache_h,
+                   base_url);
+
+    // Return total content height
+    y_ptr[0] + scroll_y - panel_y
+}
