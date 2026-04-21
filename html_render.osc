@@ -768,9 +768,33 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
                     x_ptr[0] = px + indent;
                 };
 
-                // Blit if visible
+                // Blit with vertical clipping so the image cannot bleed
+                // outside [min_y, max_y] (into the post list above or the
+                // status bar below).
                 if y_ptr[0] + blit_h >= min_y and y_ptr[0] < max_y and blit_h > 0 {
-                    gfx_blit(px + indent, y_ptr[0], blit_w, blit_h, blit_pixels);
+                    let mut draw_y: i32 = y_ptr[0];
+                    let mut draw_h: i32 = blit_h;
+                    let mut draw_px: [i32] = blit_pixels;
+                    // Clip top: skip rows whose y < min_y
+                    if draw_y < min_y {
+                        let skip_rows: i32 = min_y - draw_y;
+                        let mut clipped: [i32] = [];
+                        let start: i32 = skip_rows * blit_w;
+                        let end: i32 = blit_w * blit_h;
+                        for ci in start..end {
+                            push(clipped, blit_pixels[ci]);
+                        };
+                        draw_px = clipped;
+                        draw_h = blit_h - skip_rows;
+                        draw_y = min_y;
+                    };
+                    // Clip bottom
+                    if draw_y + draw_h > max_y {
+                        draw_h = max_y - draw_y;
+                    };
+                    if draw_h > 0 {
+                        gfx_blit(px + indent, draw_y, blit_w, draw_h, draw_px);
+                    };
                 };
                 y_ptr[0] = y_ptr[0] + blit_h + 4;
                 x_ptr[0] = px + indent;
