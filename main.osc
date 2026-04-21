@@ -700,13 +700,13 @@ fn! main() {
                         };
                     };
                 } else if focus_panel == 1 {
-                    content_scroll = content_scroll + 14;
+                    content_scroll = content_scroll + content_h;
                 };
             };
 
-            // Backspace on post list: scroll content up
+            // Backspace on post list: scroll content up one screen
             if key == 8 and focus_panel == 1 {
-                content_scroll = max_i32(0, content_scroll - 14);
+                content_scroll = max_i32(0, content_scroll - content_h);
             };
 
             // 'a' = add
