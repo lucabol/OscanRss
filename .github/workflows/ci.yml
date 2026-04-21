@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Oscan
+        shell: pwsh
+        run: |
+          $url = "https://github.com/lucabol/Oscan/releases/latest/download/oscan-windows-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile oscan.zip
+          Expand-Archive oscan.zip -DestinationPath oscan
+          echo "$PWD\oscan" | Out-File -Append -FilePath $env:GITHUB_PATH
+      - name: Build
+        shell: pwsh
+        run: .\build.ps1
+      - name: Run tests
+        shell: pwsh
+        run: .\build.ps1 -Test
