@@ -85,30 +85,6 @@ jobs:
           oscan main.osc -o "build/${{ matrix.output }}"
           ls -la "build/${{ matrix.output }}"
 
-      - name: Build MSI (Windows only)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = '${{ inputs.version }}'
-          $version = $tag.TrimStart('v')
-          # WiX requires a numeric version (x.y.z[.w])
-          if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') { $version = '0.0.0' }
-
-          # Stage payload with names the .wxs expects
-          New-Item -ItemType Directory -Force msi-build | Out-Null
-          Copy-Item "build\${{ matrix.output }}" msi-build\oscanrss.exe
-
-          dotnet tool install --global wix --version 5.0.2
-          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
-
-          wix build packaging\oscanrss.wxs `
-            -d "Version=$version" `
-            -d "BinDir=msi-build" `
-            -o "build\oscanrss-windows-x86_64.msi"
-
-          Get-Item build\oscanrss-windows-x86_64.msi
-
       - name: Run tests
         shell: bash
         run: |
@@ -124,13 +100,6 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: build/${{ matrix.output }}
-
-      - name: Upload MSI
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-x86_64-msi
-          path: build/oscanrss-windows-x86_64.msi
 
   release:
     name: Publish Release
