@@ -204,6 +204,96 @@ fn! xml_find_items(xml: str) -> [str] {
     items
 }
 
+// Atom feeds use <entry>...</entry> instead of <item>...</item>.
+fn! xml_find_entries(xml: str) -> [str] {
+    let mut entries: [str] = [];
+    let mut search_from: i32 = 0;
+    let xml_len: i32 = str_len(xml);
+
+    while search_from < xml_len {
+        let remaining: str = str_slice(xml, search_from, xml_len);
+        let e_start: i32 = str_find(remaining, "<entry");
+        if e_start < 0 { break; };
+        let after_tag: str = str_slice(remaining, e_start, str_len(remaining));
+        let gt_pos: i32 = str_find(after_tag, ">");
+        if gt_pos < 0 { break; };
+        let content_begin: i32 = search_from + e_start + gt_pos + 1;
+        let rest2: str = str_slice(xml, content_begin, xml_len);
+        let e_end: i32 = str_find(rest2, "</entry>");
+        if e_end < 0 { break; };
+        let entry_xml: str = str_slice(xml, content_begin, content_begin + e_end);
+        push(entries, entry_xml);
+        search_from = content_begin + e_end + 8;
+    };
+    entries
+}
+
+// Return the value of an attribute in a tag like <link href="..."/>.
+// `tag_prefix` is matched with a leading '<', e.g. "link".
+fn! xml_find_link_href(xml: str) -> str {
+    // Prefer <link rel="alternate" href="..."/>
+    let mut search_from: i32 = 0;
+    let xlen: i32 = str_len(xml);
+    while search_from < xlen {
+        let rest: str = str_slice(xml, search_from, xlen);
+        let lpos: i32 = str_find(rest, "<link");
+        if lpos < 0 { return ""; };
+        let tag_start: i32 = search_from + lpos;
+        let rest2: str = str_slice(xml, tag_start, xlen);
+        let gt: i32 = str_find(rest2, ">");
+        if gt < 0 { return ""; };
+        let tag_inner: str = str_slice(xml, tag_start + 5, tag_start + gt);
+        // Only take href from <link> tags that are alternates or unspecified.
+        let rel: str = xml_attr_value(tag_inner, "rel");
+        let type_v: str = xml_attr_value(tag_inner, "type");
+        let href: str = xml_attr_value(tag_inner, "href");
+        let accept_rel: bool = str_len(rel) == 0 or str_eq(rel, "alternate");
+        let accept_type: bool = str_len(type_v) == 0 or str_eq(type_v, "text/html");
+        if accept_rel and accept_type and str_len(href) > 0 {
+            return xml_entity_decode(href);
+        };
+        search_from = tag_start + gt + 1;
+    };
+    ""
+}
+
+fn! xml_attr_value(tag_inner: str, name: str) -> str {
+    let chars: [i32] = str_to_chars(tag_inner);
+    let n: i32 = len(chars);
+    let name_chars: [i32] = str_to_chars(name);
+    let nm: i32 = len(name_chars);
+    let mut i: i32 = 0;
+    while i < n {
+        let boundary: bool = if i == 0 {
+            true
+        } else {
+            let pc: i32 = chars[i - 1];
+            pc == 32 or pc == 9 or pc == 10 or pc == 13
+        };
+        if boundary and i + nm < n {
+            let mut ok: bool = true;
+            for ci in 0..nm {
+                if chars[i + ci] != name_chars[ci] { ok = false; break; };
+            };
+            if ok and chars[i + nm] == 61 {
+                let after: i32 = i + nm + 1;
+                if after < n {
+                    let q: i32 = chars[after];
+                    if q == 34 or q == 39 {
+                        let mut end: i32 = after + 1;
+                        while end < n and chars[end] != q { end += 1; };
+                        if end < n {
+                            return str_slice(tag_inner, after + 1, end);
+                        };
+                    };
+                };
+            };
+        };
+        i += 1;
+    };
+    ""
+}
+
 // Parse an RSS feed XML string
 fn! rss_parse_channel(xml: str) -> RssChannel {
     let title: str = xml_get_tag_content(xml, "title");
@@ -236,12 +326,45 @@ fn! rss_parse_item(item_xml: str) -> RssItem {
     }
 }
 
+fn! atom_parse_entry(entry_xml: str) -> RssItem {
+    let title: str = xml_get_tag_content(entry_xml, "title");
+    // <link href="..."/> may be an empty tag; xml_get_tag_content returns ""
+    // for self-closing tags, so pull href out directly.
+    let link: str = xml_find_link_href(entry_xml);
+    let mut desc: str = xml_get_tag_content(entry_xml, "content");
+    if str_len(desc) == 0 {
+        desc = xml_get_tag_content(entry_xml, "summary");
+    };
+    let mut pub_date: str = xml_get_tag_content(entry_xml, "published");
+    if str_len(pub_date) == 0 {
+        pub_date = xml_get_tag_content(entry_xml, "updated");
+    };
+    let mut guid: str = xml_get_tag_content(entry_xml, "id");
+    if str_len(guid) == 0 { guid = link; };
+    RssItem {
+        title: title,
+        link: link,
+        description: desc,
+        pub_date: pub_date,
+        guid: guid,
+    }
+}
+
 fn! rss_parse_items(xml: str) -> [RssItem] {
     let item_blocks: [str] = xml_find_items(xml);
     let mut items: [RssItem] = [];
-    for bi in 0..len(item_blocks) {
-        let item: RssItem = rss_parse_item(item_blocks[bi]);
-        push(items, item);
+    if len(item_blocks) > 0 {
+        for bi in 0..len(item_blocks) {
+            let item: RssItem = rss_parse_item(item_blocks[bi]);
+            push(items, item);
+        };
+        return items;
+    };
+    // No <item> found — try Atom <entry>.
+    let entry_blocks: [str] = xml_find_entries(xml);
+    for ei in 0..len(entry_blocks) {
+        let entry: RssItem = atom_parse_entry(entry_blocks[ei]);
+        push(items, entry);
     };
     items
 }

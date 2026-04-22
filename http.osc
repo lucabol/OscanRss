@@ -219,7 +219,7 @@ fn! http_get(host: str, port: i32, path: str, use_tls: bool) -> HttpResponse {
     };
 
     let mut redirect_url: str = "";
-    if status_code == 301 or status_code == 302 or status_code == 307 {
+    if status_code == 301 or status_code == 302 or status_code == 303 or status_code == 307 or status_code == 308 {
         if map_has(headers, "location") {
             redirect_url = map_get(headers, "location");
         };
@@ -252,8 +252,11 @@ fn! http_fetch_url(feed_url: str, redirects_left: i32) -> HttpResponse {
 
     if str_len(response.redirect_url) > 0 {
         let mut redir: str = response.redirect_url;
-        // Handle relative redirects
-        if str_starts_with(redir, "/") {
+        // Handle protocol-relative redirects: "//host/path"
+        if str_starts_with(redir, "//") {
+            redir = "{u.scheme}:{redir}";
+        } else if str_starts_with(redir, "/") {
+            // Host-relative redirect
             redir = "{u.scheme}://{u.host}{redir}";
         };
         return http_fetch_url(redir, redirects_left - 1);

@@ -115,13 +115,13 @@ fn! do_save_read(posts: [Post], read_guids: map) {
 
 // ─── Feed Fetching ───────────────────────────────────────
 
-fn! fetch_feed_posts(feed: Feed, posts: [Post], read_guids: map) {
+fn! fetch_feed_posts(feed: Feed, posts: [Post], read_guids: map) -> str {
     let response: HttpResponse = http_fetch_url(feed.url, 5);
     if str_len(response.error) > 0 {
-        return;
+        return "Failed: {feed.name}: {response.error}";
     };
     if not response.ok {
-        return;
+        return "Failed: {feed.name}: HTTP {response.status_code}";
     };
 
     let items: [RssItem] = rss_parse_items(response.body);
@@ -153,6 +153,11 @@ fn! fetch_feed_posts(feed: Feed, posts: [Post], read_guids: map) {
         };
         push(posts, post);
     };
+
+    if len(items) == 0 {
+        return "No items: {feed.name} (not RSS/Atom?)";
+    };
+    "Loaded {len(items)} posts from {feed.name}"
 }
 
 // ─── Rendering ───────────────────────────────────────────
@@ -635,8 +640,7 @@ fn! main() {
                                 if feeds[tfl].id == fid {
                                     sel_group = feeds[tfl].group_id;
                                     status_msg = "Loading {feeds[tfl].name}...";
-                                    fetch_feed_posts(feeds[tfl], posts, read_guids);
-                                    status_msg = "Loaded {feeds[tfl].name}";
+                                    status_msg = fetch_feed_posts(feeds[tfl], posts, read_guids);
                                 };
                             };
                             sel_post = -1;
@@ -773,8 +777,7 @@ fn! main() {
                     for rf in 0..len(feeds) {
                         if feeds[rf].id == sel_feed {
                             status_msg = "Refreshing {feeds[rf].name}...";
-                            fetch_feed_posts(feeds[rf], posts, read_guids);
-                            status_msg = "Refreshed {feeds[rf].name}";
+                            status_msg = fetch_feed_posts(feeds[rf], posts, read_guids);
                             break;
                         };
                     };
@@ -784,10 +787,17 @@ fn! main() {
             // 'R' = refresh all
             if key == 82 {
                 status_msg = "Refreshing all feeds...";
+                let mut n_ok: i32 = 0;
+                let mut n_fail: i32 = 0;
                 for ra in 0..len(feeds) {
-                    fetch_feed_posts(feeds[ra], posts, read_guids);
+                    let r: str = fetch_feed_posts(feeds[ra], posts, read_guids);
+                    if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+                        n_fail += 1;
+                    } else {
+                        n_ok += 1;
+                    };
                 };
-                status_msg = "All feeds refreshed";
+                status_msg = "Refreshed {n_ok} ok, {n_fail} failed";
             };
 
             // 'm' = toggle read/unread
@@ -939,8 +949,7 @@ fn! main() {
                 sel_post = -1;
                 list_scroll = 0;
                 status_msg = "Loading {feeds[fidx].name}...";
-                fetch_feed_posts(feeds[fidx], posts, read_guids);
-                status_msg = "Loaded {feeds[fidx].name}";
+                status_msg = fetch_feed_posts(feeds[fidx], posts, read_guids);
             };
         } else if tree_click >= 10000 and is_normal {
             // Clicked a group
@@ -1077,7 +1086,7 @@ fn! main() {
                             storage_save_feeds(feeds);
                             status_msg = "Feed added: {fname_new}";
                             // Fetch posts
-                            fetch_feed_posts(new_feed, posts, read_guids);
+                            status_msg = fetch_feed_posts(new_feed, posts, read_guids);
                         };
                     },
                     AppMode::EditFeed => {

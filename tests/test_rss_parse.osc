@@ -101,5 +101,18 @@ fn! main() {
     assert_eq_i32("no_guid_count", 1, len(ng_items));
     assert_eq_str("guid_fallback", "http://test.com/3", ng_items[0].guid);
 
+    // Test Atom feed parsing (fallback when no <item> present)
+    let atom: str = "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Atom Test</title><link href=\"http://test.com\"/><entry><title>Atom Post 1</title><link href=\"http://test.com/a1\" rel=\"alternate\"/><id>tag:test,2025:a1</id><published>2025-04-21T00:00:00Z</published><content type=\"html\">Atom body 1</content></entry><entry><title>Atom Post 2</title><link href=\"http://test.com/a2\"/><id>tag:test,2025:a2</id><updated>2025-04-20T00:00:00Z</updated><summary>Summary 2</summary></entry></feed>";
+    let atom_items: [RssItem] = rss_parse_items(atom);
+    assert_eq_i32("atom_count", 2, len(atom_items));
+    assert_eq_str("atom_0_title", "Atom Post 1", atom_items[0].title);
+    assert_eq_str("atom_0_link", "http://test.com/a1", atom_items[0].link);
+    assert_eq_str("atom_0_guid", "tag:test,2025:a1", atom_items[0].guid);
+    assert_eq_str("atom_0_desc", "Atom body 1", atom_items[0].description);
+    assert_eq_str("atom_1_title", "Atom Post 2", atom_items[1].title);
+    assert_eq_str("atom_1_link", "http://test.com/a2", atom_items[1].link);
+    assert_eq_str("atom_1_desc", "Summary 2", atom_items[1].description);
+    assert_eq_str("atom_1_date", "2025-04-20T00:00:00Z", atom_items[1].pub_date);
+
     println("=== Tests Complete ===");
 }
