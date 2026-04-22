@@ -1,0 +1,95 @@
+// Tests for the OPML importer.
+
+use "../opml_parse.osc"
+
+fn! assert_eq_i32(label: str, expected: i32, actual: i32) {
+    if expected == actual {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected={expected} got={actual}");
+    };
+}
+
+fn! assert_eq_str(label: str, expected: str, actual: str) {
+    if str_eq(expected, actual) {
+        println("PASS: {label}");
+    } else {
+        println("FAIL: {label} expected='{expected}' got='{actual}'");
+    };
+}
+
+fn! main() {
+    println("=== OPML Import Tests ===");
+
+    // Attribute extraction
+    let body: str = " type=\"rss\" text=\"Bollore\" xmlUrl=\"https://example.com/a.xml\" htmlUrl=\"https://example.com\"";
+    assert_eq_str("attr_xmlUrl", "https://example.com/a.xml", opml_get_attr(body, "xmlUrl"));
+    assert_eq_str("attr_text", "Bollore", opml_get_attr(body, "text"));
+    assert_eq_str("attr_htmlUrl", "https://example.com", opml_get_attr(body, "htmlUrl"));
+    // "Url" must NOT match xmlUrl or htmlUrl as a suffix — boundary check.
+    assert_eq_str("attr_no_suffix_match", "", opml_get_attr(body, "Url"));
+    assert_eq_str("attr_missing", "", opml_get_attr(body, "nope"));
+
+    // Single quotes
+    let body2: str = " xmlUrl='https://single.example/feed'";
+    assert_eq_str("attr_single_quote", "https://single.example/feed", opml_get_attr(body2, "xmlUrl"));
+
+    // Entity-decoded values
+    let body3: str = " text=\"A &amp; B\"";
+    assert_eq_str("attr_entity", "A & B", opml_get_attr(body3, "text"));
+
+    // Full Feedly-style OPML
+    let sample: str = str_concat(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        str_concat(
+            "<opml version=\"1.0\"><head><title>subs</title></head><body>\n",
+            str_concat(
+                "<outline text=\"Investing\" title=\"Investing\">\n",
+                str_concat(
+                    "<outline type=\"rss\" text=\"Bollore\" title=\"Bollore\" xmlUrl=\"https://seekingalpha.com/api/sa/combined/bllrf.xml\" htmlUrl=\"https://seekingalpha.com\"/>\n",
+                    str_concat(
+                        "<outline type=\"rss\" text=\"Holmes Osborne\" title=\"Holmes Osborne\" xmlUrl=\"https://seekingalpha.com/author/holmes-osborne.xml\" htmlUrl=\"https://seekingalpha.com\"/>\n",
+                        str_concat(
+                            "</outline>\n",
+                            str_concat(
+                                "<outline text=\"Coding\" title=\"Coding\">\n",
+                                str_concat(
+                                    "<outline type=\"rss\" text=\"A Blog\" xmlUrl=\"https://blog.example/a.xml\"/>\n",
+                                    "</outline></body></opml>"
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    );
+
+    let mut groups: [FeedGroup] = [];
+    let mut feeds: [Feed] = [];
+    let n_added: i32 = opml_import(sample, groups, feeds);
+    assert_eq_i32("import_count", 3, n_added);
+    assert_eq_i32("groups_count", 2, len(groups));
+    assert_eq_i32("feeds_count", 3, len(feeds));
+
+    // First feed goes to Investing
+    assert_eq_str("feed0_name", "Bollore", feeds[0].name);
+    assert_eq_str("feed0_url", "https://seekingalpha.com/api/sa/combined/bllrf.xml", feeds[0].url);
+    // Third feed goes to Coding
+    assert_eq_str("feed2_name", "A Blog", feeds[2].name);
+
+    // Importing again: duplicate URLs are skipped.
+    let n_added2: i32 = opml_import(sample, groups, feeds);
+    assert_eq_i32("import_duplicates", 0, n_added2);
+    assert_eq_i32("groups_stable", 2, len(groups));
+    assert_eq_i32("feeds_stable", 3, len(feeds));
+
+    // Feeds outside any <outline> go into an "Imported" default group.
+    let flat: str = "<opml><body><outline type=\"rss\" text=\"Orphan\" xmlUrl=\"https://orphan.example/f.xml\"/></body></opml>";
+    let mut g2: [FeedGroup] = [];
+    let mut f2: [Feed] = [];
+    let _n3: i32 = opml_import(flat, g2, f2);
+    assert_eq_i32("orphan_groups", 1, len(g2));
+    assert_eq_str("orphan_group_name", "Imported", g2[0].name);
+    assert_eq_i32("orphan_feeds", 1, len(f2));
+}

@@ -7,6 +7,7 @@ use "http.osc"
 use "rss_parse.osc"
 use "html_render.osc"
 use "storage.osc"
+use "opml_parse.osc"
 use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
@@ -413,6 +414,7 @@ fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
         AppMode::AddFeed => { "Add Feed" },
         AppMode::EditFeed => { "Edit Feed" },
         AppMode::Confirm => { "Confirm Delete" },
+        AppMode::ImportOpml => { "Import OPML" },
         AppMode::Normal => { "Dialog" },
     };
     gfx_draw_text(dx + 10, dy + 8, title, TITLE_COLOR, 0);
@@ -443,6 +445,11 @@ fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
         },
         AppMode::Confirm => {
             gfx_draw_text(dx + 10, dy + 50, "Are you sure you want to delete?", TEXT_COLOR, 0);
+        },
+        AppMode::ImportOpml => {
+            gfx_draw_text(dx + 10, dy + 34, "OPML file path:", TEXT_COLOR, 0);
+            let _fi: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+            gfx_draw_text(dx + 10, dy + 78, "Groups & feeds are appended; duplicates skipped.", DIM_COLOR, 0);
         },
         _ => {},
     };
@@ -841,6 +848,7 @@ fn! main() {
         let add_feed_clicked: bool = ui_button(btn_x + 62, btn_base_y, 56, BTN_H, "+Feed", prev_btn);
         let edit_clicked: bool = ui_button(btn_x + 122, btn_base_y, 50, BTN_H, "Edit", prev_btn);
         let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H, "Del", prev_btn);
+        let import_clicked: bool = ui_button(btn_x + 230, btn_base_y, 60, BTN_H, "Import", prev_btn);
 
         // View-filter buttons in chrome: "All" and "Unread" toggle
         // what the post list shows.
@@ -882,6 +890,11 @@ fn! main() {
             };
             if del_clicked and (sel_feed >= 0 or sel_group >= 0) {
                 mode = AppMode::Confirm;
+            };
+            if import_clicked {
+                mode = AppMode::ImportOpml;
+                while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                dialog_field = 0;
             };
             if all_clicked {
                 show_unread_only = false;
@@ -1149,6 +1162,25 @@ fn! main() {
                             storage_save_groups(groups);
                             storage_save_feeds(feeds);
                             status_msg = "Group deleted";
+                        };
+                    },
+                    AppMode::ImportOpml => {
+                        let opml_path: str = str_trim(text_buf_to_str(dialog_buf1));
+                        if str_len(opml_path) == 0 {
+                            status_msg = "Import cancelled: no path provided";
+                        } else {
+                            let r: Result<str, str> = read_file(opml_path);
+                            match r {
+                                Result::Ok(body) => {
+                                    let n_added: i32 = opml_import(body, groups, feeds);
+                                    storage_save_groups(groups);
+                                    storage_save_feeds(feeds);
+                                    status_msg = "Imported {n_added} new feed(s) from OPML";
+                                },
+                                Result::Err(e) => {
+                                    status_msg = "Failed to read OPML: {e}";
+                                },
+                            };
                         };
                     },
                     _ => {},

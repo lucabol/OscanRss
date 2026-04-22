@@ -29,4 +29,5 @@ enum AppMode {
     EditGroup,
     EditFeed,
     Confirm,
+    ImportOpml,
 }

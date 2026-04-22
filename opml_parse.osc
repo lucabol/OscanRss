@@ -1,0 +1,191 @@
+// OPML 1.0/2.0 import for OscanRss
+// Parses an OPML subscription list and appends new groups and feeds
+// into the existing arrays (skipping exact-URL duplicates).
+// Supports the common Feedly / Google-Reader export shape where
+// <outline text="GroupName"> wraps <outline type="rss" xmlUrl="..."/> entries.
+
+use "types.osc"
+use "rss_parse.osc"
+
+// Returns true if string `s` contains the substring `needle` at index `pos`.
+fn! opml_has_at(s: str, pos: i32, needle: str) -> bool {
+    let slen: i32 = str_len(s);
+    let nlen: i32 = str_len(needle);
+    if pos < 0 or pos + nlen > slen { return false; };
+    let sub: str = str_slice(s, pos, pos + nlen);
+    str_eq(sub, needle)
+}
+
+// Case-sensitive attribute lookup inside a tag body like
+//   ` type="rss" text="Bollore" xmlUrl='https://...'`
+// Returns the decoded value, or "" if the attribute isn't present.
+fn! opml_get_attr(tag_inner: str, name: str) -> str {
+    let chars: [i32] = str_to_chars(tag_inner);
+    let n: i32 = len(chars);
+    let name_chars: [i32] = str_to_chars(name);
+    let nm: i32 = len(name_chars);
+
+    let mut i: i32 = 0;
+    while i < n {
+        // Must start at a token boundary (preceded by whitespace or the
+        // very start of the body), otherwise we'd match "htmlUrl" while
+        // searching for "Url".
+        let boundary: bool = if i == 0 {
+            true
+        } else {
+            let pc: i32 = chars[i - 1];
+            pc == 32 or pc == 9 or pc == 10 or pc == 13
+        };
+        if boundary and i + nm < n {
+            let mut matches_name: bool = true;
+            for ci in 0..nm {
+                if chars[i + ci] != name_chars[ci] { matches_name = false; break; };
+            };
+            if matches_name and chars[i + nm] == 61 { // '='
+                let after: i32 = i + nm + 1;
+                if after < n {
+                    let q: i32 = chars[after];
+                    if q == 34 or q == 39 {
+                        let mut end: i32 = after + 1;
+                        while end < n and chars[end] != q {
+                            end += 1;
+                        };
+                        if end < n {
+                            let raw: str = str_slice(tag_inner, after + 1, end);
+                            return xml_entity_decode(raw);
+                        };
+                    };
+                };
+            };
+        };
+        i += 1;
+    };
+    ""
+}
+
+fn! opml_name_from_tag(tag_inner: str) -> str {
+    let t: str = opml_get_attr(tag_inner, "title");
+    if str_len(t) > 0 { return t; };
+    opml_get_attr(tag_inner, "text")
+}
+
+fn! opml_next_id(ids: [i32]) -> i32 {
+    let mut mx: i32 = 0;
+    for ni in 0..len(ids) {
+        if ids[ni] > mx { mx = ids[ni]; };
+    };
+    mx + 1
+}
+
+fn! opml_find_or_add_group(groups: [FeedGroup], name: str) -> i32 {
+    for gi in 0..len(groups) {
+        if str_eq(groups[gi].name, name) {
+            return groups[gi].id;
+        };
+    };
+    let mut ids: [i32] = [];
+    for gj in 0..len(groups) { push(ids, groups[gj].id); };
+    let new_id: i32 = opml_next_id(ids);
+    let g: FeedGroup = FeedGroup {
+        id: new_id, name: name, expanded: true,
+    };
+    push(groups, g);
+    new_id
+}
+
+fn! opml_feed_url_exists(feeds: [Feed], url: str) -> bool {
+    for fi in 0..len(feeds) {
+        if str_eq(feeds[fi].url, url) { return true; };
+    };
+    false
+}
+
+// Parse OPML XML and append new groups/feeds to the given arrays.
+// Returns the number of NEW feeds added (duplicates by URL are skipped).
+fn! opml_import(xml: str, groups: [FeedGroup], feeds: [Feed]) -> i32 {
+    let mut added: i32 = 0;
+    let chars: [i32] = str_to_chars(xml);
+    let n: i32 = len(chars);
+    let xlen: i32 = str_len(xml);
+
+    // Stack of group names currently open (most recent on top).
+    let mut group_stack: [str] = [];
+    let default_group: str = "Imported";
+
+    let mut i: i32 = 0;
+    while i < n {
+        if chars[i] == 60 { // '<'
+            // Closing tag?
+            if i + 1 < n and chars[i + 1] == 47 {
+                // Is it </outline>?
+                if opml_has_at(xml, i, "</outline>") or opml_has_at(xml, i, "</outline ") {
+                    if len(group_stack) > 0 { pop(group_stack); };
+                    // Skip past '>'
+                    let mut j: i32 = i;
+                    while j < n and chars[j] != 62 { j += 1; };
+                    i = j + 1;
+                } else {
+                    i += 1;
+                };
+            } else if opml_has_at(xml, i, "<outline") {
+                // Must be followed by a char that terminates the tag name.
+                let after_name: i32 = i + 8;
+                let ok_outline: bool = after_name < n and (
+                    chars[after_name] == 32 or
+                    chars[after_name] == 9 or
+                    chars[after_name] == 10 or
+                    chars[after_name] == 13 or
+                    chars[after_name] == 62 or // '>'
+                    chars[after_name] == 47    // '/'
+                );
+                if ok_outline {
+                    // Find closing '>'
+                    let mut k: i32 = after_name;
+                    while k < n and chars[k] != 62 { k += 1; };
+                    if k >= n { return added; };
+                    let self_close: bool = k > 0 and chars[k - 1] == 47;
+                    let body_end: i32 = if self_close { k - 1 } else { k };
+                    let tag_inner: str = str_slice(xml, after_name, body_end);
+
+                    let xml_url: str = opml_get_attr(tag_inner, "xmlUrl");
+                    let disp_name: str = opml_name_from_tag(tag_inner);
+
+                    if str_len(xml_url) > 0 {
+                        let group_name: str = if len(group_stack) > 0 {
+                            group_stack[len(group_stack) - 1]
+                        } else {
+                            default_group
+                        };
+                        let gid: i32 = opml_find_or_add_group(groups, group_name);
+                        if not opml_feed_url_exists(feeds, xml_url) {
+                            let fname: str = if str_len(disp_name) > 0 { disp_name } else { xml_url };
+                            let mut fids: [i32] = [];
+                            for ff in 0..len(feeds) { push(fids, feeds[ff].id); };
+                            let new_fid: i32 = opml_next_id(fids);
+                            let new_feed: Feed = Feed {
+                                id: new_fid, group_id: gid,
+                                name: fname, url: xml_url,
+                            };
+                            push(feeds, new_feed);
+                            added += 1;
+                        };
+                    } else {
+                        if not self_close and str_len(disp_name) > 0 {
+                            push(group_stack, disp_name);
+                        };
+                    };
+                    i = k + 1;
+                } else {
+                    i += 1;
+                };
+            } else {
+                i += 1;
+            };
+        } else {
+            i += 1;
+        };
+    };
+
+    let _unused_len: i32 = xlen;
+    added
+}
