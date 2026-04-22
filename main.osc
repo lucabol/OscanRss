@@ -340,7 +340,8 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
 fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
                      read_guids: map, show_unread_only: bool,
                      list_scroll: i32, panel_x: i32, panel_w: i32,
-                     panel_h: i32, prev_btn: i32, list_h: i32) -> i32 {
+                     panel_h: i32, prev_btn: i32, list_h: i32,
+                     status_msg: str) -> i32 {
     let py: i32 = CHROME_H;
     let max_y: i32 = py + list_h;
     gfx_fill_rect(panel_x, py, panel_w, list_h, BG_COLOR);
@@ -397,6 +398,17 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
 
     // Separator below post list
     gfx_line(panel_x, py + list_h, panel_x + panel_w, py + list_h, BORDER_COLOR);
+
+    // If nothing was rendered and the last status looks like a fetch
+    // error, display it inside the pane so it's obvious why.
+    if visible_idx == 0 and sel_feed > 0 {
+        let is_err: bool = str_starts_with(status_msg, "Failed:") or str_starts_with(status_msg, "No items:");
+        if is_err {
+            let max_chars: i32 = (panel_w - 24) / 8;
+            let msg_line: str = truncate_str(status_msg, max_chars);
+            gfx_draw_text(panel_x + 12, py + ROW_H + 12, msg_line, UNREAD_COLOR, 0);
+        };
+    };
 
     clicked_post
 }
@@ -1045,7 +1057,8 @@ fn! main() {
             let post_click: i32 = render_post_list(posts, sel_feed, sel_post,
                                                     read_guids, show_unread_only,
                                                     list_scroll, tree_w, panel_w,
-                                                    panel_h, prev_btn, list_h);
+                                                    panel_h, prev_btn, list_h,
+                                                    status_msg);
             if post_click >= 0 and is_normal {
                 sel_post = post_click;
                 content_scroll = 0;
