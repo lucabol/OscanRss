@@ -37,6 +37,7 @@ let LINK_COLOR: i32 = 100 * 65536 + 149 * 256 + 237;
 let BORDER_COLOR: i32 = 65 * 65536 + 65 * 256 + 70;
 let STATUS_BG: i32 = 40 * 65536 + 40 * 256 + 44;
 let DIALOG_BG: i32 = 50 * 65536 + 50 * 256 + 55;
+let ERROR_COLOR: i32 = 230 * 65536 + 80 * 256 + 80;
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -237,6 +238,34 @@ fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) ->
     "Loaded {len(items)} posts from {feed.name}{extra}"
 }
 
+// Wrapper: fetches a feed and records success/failure in `failed_feeds`
+// (keyed by feed id as string). Returns the status message.
+fn! fetch_and_track(feeds: [Feed], idx: i32, posts: [Post], read_guids: map, failed_feeds: map) -> str {
+    let r: str = fetch_feed_posts(feeds, idx, posts, read_guids);
+    let key: str = i32_to_str(feeds[idx].id);
+    if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+        map_set(failed_feeds, key, r);
+    } else {
+        map_delete(failed_feeds, key);
+    };
+    r
+}
+
+// Refreshes every feed, rebuilding `failed_feeds` from scratch.
+fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map, failed_feeds: map) -> str {
+    let mut n_ok: i32 = 0;
+    let mut n_fail: i32 = 0;
+    for ra in 0..len(feeds) {
+        let r: str = fetch_and_track(feeds, ra, posts, read_guids, failed_feeds);
+        if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+            n_fail += 1;
+        } else {
+            n_ok += 1;
+        };
+    };
+    "Refreshed {n_ok} ok, {n_fail} failed"
+}
+
 // ─── Rendering ───────────────────────────────────────────
 
 fn! render_chrome(w: i32) {
@@ -258,7 +287,7 @@ fn! render_status(w: i32, h: i32, total_unread: i32, status_msg: str) {
 fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                       read_guids: map, sel_group: i32, sel_feed: i32,
                       tree_scroll: i32, panel_h: i32, prev_btn: i32,
-                      tree_w: i32) -> i32 {
+                      tree_w: i32, failed_feeds: map) -> i32 {
     let px: i32 = 0;
     let py: i32 = CHROME_H;
     gfx_fill_rect(px, py, tree_w, panel_h, PANEL_BG);
@@ -301,34 +330,47 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
         };
         draw_y += ROW_H;
 
-        // Draw feeds under this group if expanded
+        // Draw feeds under this group if expanded.
+        // Two passes: healthy feeds first, failed feeds (in red) at the bottom.
         if g.expanded {
-            for fi3 in 0..len(feeds) {
-                if feeds[fi3].group_id == g.id {
-                    let fy: i32 = draw_y;
-                    if fy >= py and fy < py + panel_h - ROW_H {
-                        if feeds[fi3].id == sel_feed {
-                            gfx_fill_rect(px, fy, tree_w - 1, ROW_H, SELECT_BG);
-                        };
+            for pass in 0..2 {
+                for fi3 in 0..len(feeds) {
+                    if feeds[fi3].group_id == g.id {
+                        let fkey: str = i32_to_str(feeds[fi3].id);
+                        let has_err: bool = map_has(failed_feeds, fkey);
+                        let is_err_pass: bool = pass == 1;
+                        if has_err == is_err_pass {
+                            let fy: i32 = draw_y;
+                            if fy >= py and fy < py + panel_h - ROW_H {
+                                if feeds[fi3].id == sel_feed {
+                                    gfx_fill_rect(px, fy, tree_w - 1, ROW_H, SELECT_BG);
+                                };
 
-                        gfx_draw_text(px + 24, fy + 4, "*", DIM_COLOR, 0);
-                        let fname: str = truncate_str(feeds[fi3].name, 18);
-                        gfx_draw_text(px + 36, fy + 4, fname, TEXT_COLOR, 0);
+                                let marker: str = if has_err { "!" } else { "*" };
+                                let marker_color: i32 = if has_err { ERROR_COLOR } else { DIM_COLOR };
+                                gfx_draw_text(px + 24, fy + 4, marker, marker_color, 0);
+                                let fname: str = truncate_str(feeds[fi3].name, 18);
+                                let fname_color: i32 = if has_err { ERROR_COLOR } else { TEXT_COLOR };
+                                gfx_draw_text(px + 36, fy + 4, fname, fname_color, 0);
 
-                        let funread: i32 = count_unread(posts, feeds[fi3].id, read_guids);
-                        if funread > 0 {
-                            let fbadge: str = "({funread})";
-                            gfx_draw_text(px + 38 + str_len(fname) * 8, fy + 4, fbadge, BADGE_COLOR, 0);
-                        };
+                                if not has_err {
+                                    let funread: i32 = count_unread(posts, feeds[fi3].id, read_guids);
+                                    if funread > 0 {
+                                        let fbadge: str = "({funread})";
+                                        gfx_draw_text(px + 38 + str_len(fname) * 8, fy + 4, fbadge, BADGE_COLOR, 0);
+                                    };
+                                };
 
-                        let mx2: i32 = canvas_mouse_x();
-                        let my2: i32 = canvas_mouse_y();
-                        let mbtn2: i32 = canvas_mouse_btn();
-                        if ui_in_rect(mx2, my2, px, fy, tree_w, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
-                            clicked_type = 20000 + fi3;
+                                let mx2: i32 = canvas_mouse_x();
+                                let my2: i32 = canvas_mouse_y();
+                                let mbtn2: i32 = canvas_mouse_btn();
+                                if ui_in_rect(mx2, my2, px, fy, tree_w, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
+                                    clicked_type = 20000 + fi3;
+                                };
+                            };
+                            draw_y += ROW_H;
                         };
                     };
-                    draw_y += ROW_H;
                 };
             };
         };
@@ -603,6 +645,7 @@ fn! main() {
     let mut feeds: [Feed] = [];
     let mut posts: [Post] = [];
     let mut read_guids: map = map_new();
+    let mut failed_feeds: map = map_new();
 
     // Load persisted data
     storage_load_groups(groups);
@@ -651,6 +694,12 @@ fn! main() {
     match open_result {
         Result::Ok(_s) => {},
         Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
+    };
+
+    // On startup, try to fetch every feed so errored feeds can be
+    // marked in the tree. This blocks until all feeds are tried.
+    if len(feeds) > 0 {
+        status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds);
     };
 
     while canvas_alive() {
@@ -729,7 +778,7 @@ fn! main() {
                                 if feeds[tfl].id == fid {
                                     sel_group = feeds[tfl].group_id;
                                     status_msg = "Loading {feeds[tfl].name}...";
-                                    status_msg = fetch_feed_posts(feeds, tfl, posts, read_guids);
+                                    status_msg = fetch_and_track(feeds, tfl, posts, read_guids, failed_feeds);
                                 };
                             };
                             sel_post = -1;
@@ -866,7 +915,7 @@ fn! main() {
                     for rf in 0..len(feeds) {
                         if feeds[rf].id == sel_feed {
                             status_msg = "Refreshing {feeds[rf].name}...";
-                            status_msg = fetch_feed_posts(feeds, rf, posts, read_guids);
+                            status_msg = fetch_and_track(feeds, rf, posts, read_guids, failed_feeds);
                             break;
                         };
                     };
@@ -876,17 +925,7 @@ fn! main() {
             // 'R' = refresh all
             if key == 82 {
                 status_msg = "Refreshing all feeds...";
-                let mut n_ok: i32 = 0;
-                let mut n_fail: i32 = 0;
-                for ra in 0..len(feeds) {
-                    let r: str = fetch_feed_posts(feeds, ra, posts, read_guids);
-                    if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
-                        n_fail += 1;
-                    } else {
-                        n_ok += 1;
-                    };
-                };
-                status_msg = "Refreshed {n_ok} ok, {n_fail} failed";
+                status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds);
             };
 
             // 'm' = toggle read/unread
@@ -1027,7 +1066,7 @@ fn! main() {
         let tree_click: i32 = render_tree_panel(groups, feeds, posts, read_guids,
                                                  sel_group, sel_feed, tree_scroll,
                                                  panel_h - BTN_H - 10, prev_btn,
-                                                 tree_w);
+                                                 tree_w, failed_feeds);
         if tree_click >= 20000 and is_normal {
             // Clicked a feed — select and auto-refresh so newly-arrived
             // posts show without the user having to press Refresh.
@@ -1038,7 +1077,7 @@ fn! main() {
                 sel_post = -1;
                 list_scroll = 0;
                 status_msg = "Loading {feeds[fidx].name}...";
-                status_msg = fetch_feed_posts(feeds, fidx, posts, read_guids);
+                status_msg = fetch_and_track(feeds, fidx, posts, read_guids, failed_feeds);
             };
         } else if tree_click >= 10000 and is_normal {
             // Clicked a group
@@ -1176,7 +1215,7 @@ fn! main() {
                             storage_save_feeds(feeds);
                             status_msg = "Feed added: {fname_new}";
                             // Fetch posts (new feed is the last one pushed)
-                            status_msg = fetch_feed_posts(feeds, len(feeds) - 1, posts, read_guids);
+                            status_msg = fetch_and_track(feeds, len(feeds) - 1, posts, read_guids, failed_feeds);
                         };
                     },
                     AppMode::EditFeed => {
