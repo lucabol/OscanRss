@@ -37,6 +37,9 @@ jobs:
             exit 1
           fi
           OSCAN_DIR=$(dirname "$(realpath "$OSCAN_BIN")")
+          if command -v cygpath >/dev/null 2>&1; then
+            OSCAN_DIR=$(cygpath -w "$OSCAN_DIR")
+          fi
           echo "$OSCAN_DIR" >> "$GITHUB_PATH"
           echo "Oscan installed from $OSCAN_DIR"
       - name: Build
