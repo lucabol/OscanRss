@@ -320,7 +320,18 @@ fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map,
             let failed: bool = str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:");
             let key: str = i32_to_str(feeds[ra].id);
             if failed {
-                push(need_fallback, ra);
+                // If the server responded 2xx with HTML, the URL is
+                // reachable but simply isn't a feed — retrying with
+                // subdomain-strip / scheme-swap candidates won't help
+                // and would just slow startup. Record the error now.
+                let ct_lc: str = str_to_lower(resp.content_type);
+                let is_html: bool = resp.ok and str_find(ct_lc, "html") >= 0;
+                if is_html {
+                    map_set(failed_feeds, key, msg);
+                    n_fail += 1;
+                } else {
+                    push(need_fallback, ra);
+                };
             } else {
                 map_delete(failed_feeds, key);
                 n_ok += 1;
