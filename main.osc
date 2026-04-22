@@ -175,13 +175,11 @@ fn! try_fetch_with_fallbacks(candidates: [str], resolved_url: [str]) -> HttpResp
     last
 }
 
-fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) -> str {
-    if idx < 0 or idx >= len(feeds) { return "Invalid feed"; };
+// Apply an already-fetched HttpResponse to a feed: replace its posts and
+// return a status message. Does NOT try URL fallbacks.
+fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
+                        posts: [Post]) -> str {
     let feed: Feed = feeds[idx];
-    let candidates: [str] = feed_candidate_urls(feed.url);
-    let mut resolved: [str] = [];
-    let response: HttpResponse = try_fetch_with_fallbacks(candidates, resolved);
-
     if str_len(response.error) > 0 {
         return "Failed: {feed.name}: {response.error}";
     };
@@ -195,11 +193,8 @@ fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) ->
     let mut ri: i32 = len(posts) - 1;
     while ri >= 0 {
         if posts[ri].feed_id == feed.id {
-            // Swap with last and pop
             let last_idx: i32 = len(posts) - 1;
-            if ri < last_idx {
-                posts[ri] = posts[last_idx];
-            };
+            if ri < last_idx { posts[ri] = posts[last_idx]; };
             pop(posts);
         };
         ri -= 1;
@@ -227,15 +222,29 @@ fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) ->
         return "No items: {feed.name} (not RSS/Atom?)";
     };
 
+    "Loaded {len(items)} posts from {feed.name}"
+}
+
+fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) -> str {
+    if idx < 0 or idx >= len(feeds) { return "Invalid feed"; };
+    let feed: Feed = feeds[idx];
+    let candidates: [str] = feed_candidate_urls(feed.url);
+    let mut resolved: [str] = [];
+    let response: HttpResponse = try_fetch_with_fallbacks(candidates, resolved);
+
+    let msg: str = apply_feed_response(feeds, idx, response, posts);
+    if str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:") {
+        return msg;
+    };
+
     // If a different URL than the stored one worked, persist it.
-    let mut extra: str = "";
     if len(resolved) > 0 and not str_eq(resolved[0], feed.url) {
         feeds[idx].url = resolved[0];
         storage_save_feeds(feeds);
-        extra = " (url updated)";
+        return "Loaded posts from {feed.name} (url updated)";
     };
 
-    "Loaded {len(items)} posts from {feed.name}{extra}"
+    msg
 }
 
 // Wrapper: fetches a feed and records success/failure in `failed_feeds`
@@ -251,18 +260,49 @@ fn! fetch_and_track(feeds: [Feed], idx: i32, posts: [Post], read_guids: map, fai
     r
 }
 
-// Refreshes every feed, rebuilding `failed_feeds` from scratch.
+// Refreshes every feed, rebuilding `failed_feeds` from scratch. Runs
+// the initial fetch in parallel using curl; feeds that fail the first
+// pass are retried serially with URL fallback rewriting.
 fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map, failed_feeds: map) -> str {
     let mut n_ok: i32 = 0;
     let mut n_fail: i32 = 0;
+
+    // Collect stored URLs in order.
+    let mut urls: [str] = [];
+    for fu in 0..len(feeds) {
+        push(urls, feeds[fu].url);
+    };
+
+    let responses: [HttpResponse] = http_fetch_parallel(urls, 8);
+    let mut need_fallback: [i32] = [];
+
     for ra in 0..len(feeds) {
-        let r: str = fetch_and_track(feeds, ra, posts, read_guids, failed_feeds);
-        if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
-            n_fail += 1;
+        let resp: HttpResponse = responses[ra];
+        let msg: str = apply_feed_response(feeds, ra, resp, posts);
+        let failed: bool = str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:");
+        let key: str = i32_to_str(feeds[ra].id);
+        if failed {
+            // Retry with URL-fallback logic serially.
+            push(need_fallback, ra);
         } else {
+            map_delete(failed_feeds, key);
             n_ok += 1;
         };
     };
+
+    for nfi in 0..len(need_fallback) {
+        let idx: i32 = need_fallback[nfi];
+        let r: str = fetch_feed_posts(feeds, idx, posts, read_guids);
+        let key2: str = i32_to_str(feeds[idx].id);
+        if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+            map_set(failed_feeds, key2, r);
+            n_fail += 1;
+        } else {
+            map_delete(failed_feeds, key2);
+            n_ok += 1;
+        };
+    };
+
     "Refreshed {n_ok} ok, {n_fail} failed"
 }
 

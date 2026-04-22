@@ -264,3 +264,163 @@ fn! http_fetch_url(feed_url: str, redirects_left: i32) -> HttpResponse {
 
     response
 }
+
+// ─── Parallel fetch via curl ──────────────────────────────
+
+// Return the OS temp directory.
+fn! http_tmp_dir() -> str {
+    let t: Result<str, str> = env_get("TEMP");
+    match t {
+        Result::Ok(v) => { if str_len(v) > 0 { return v; }; },
+        Result::Err(_e) => {},
+    };
+    let t2: Result<str, str> = env_get("TMPDIR");
+    match t2 {
+        Result::Ok(v2) => { if str_len(v2) > 0 { return v2; }; },
+        Result::Err(_e2) => {},
+    };
+    "/tmp"
+}
+
+// Parse curl-written header dump. curl with -L writes a header block per
+// hop separated by blank lines; we want the LAST one (the final response).
+fn! http_parse_curl_headers(hdr_text: str) -> HttpResponse {
+    // Split into blocks by empty line. We walk lines and track the last
+    // block that starts with "HTTP/".
+    let lines: [str] = str_split(hdr_text, "\n");
+    let mut last_start: i32 = -1;
+    let mut last_end: i32 = len(lines);
+    let mut cur_start: i32 = -1;
+    for li in 0..len(lines) {
+        let ln: str = str_trim(lines[li]);
+        if str_starts_with(ln, "HTTP/") {
+            cur_start = li;
+            last_start = li;
+        } else if str_len(ln) == 0 and cur_start >= 0 {
+            last_end = li;
+            cur_start = -1;
+        };
+    };
+    if last_start < 0 {
+        return http_make_error("no HTTP status line in headers");
+    };
+    // Build header block
+    let mut block_lines: [str] = [];
+    let mut status_code: i32 = 0;
+    let status_line: str = str_trim(lines[last_start]);
+    // Parse "HTTP/1.1 200 OK"
+    let sp1: i32 = str_find(status_line, " ");
+    if sp1 > 0 {
+        let rest: str = str_slice(status_line, sp1 + 1, str_len(status_line));
+        let sp2: i32 = str_find(rest, " ");
+        let code_str: str = if sp2 > 0 { str_slice(rest, 0, sp2) } else { rest };
+        let ci_r: Result<i32, str> = parse_i32(code_str);
+        match ci_r {
+            Result::Ok(v) => { status_code = v; },
+            Result::Err(_e) => {},
+        };
+    };
+    for li2 in (last_start + 1)..last_end {
+        push(block_lines, str_trim(lines[li2]));
+    };
+    let headers: map = http_parse_headers(str_join(block_lines, "\r\n"));
+    let mut content_type: str = "";
+    if map_has(headers, "content-type") {
+        content_type = map_get(headers, "content-type");
+    };
+    let is_ok: bool = status_code >= 200 and status_code < 300;
+    HttpResponse {
+        status_code: status_code,
+        content_type: content_type,
+        body: "",
+        redirect_url: "",
+        error: "",
+        ok: is_ok,
+    }
+}
+
+// Fetch many URLs in parallel by spawning one curl per URL. Returns an
+// array of HttpResponse in the same order as `urls`. If curl is not
+// available, each response has an error set and the caller should fall
+// back to the synchronous path.
+fn! http_fetch_parallel(urls: [str], timeout_sec: i32) -> [HttpResponse] {
+    let mut out: [HttpResponse] = [];
+    let curl_r: Result<str, str> = path_find_exec("curl");
+    let mut curl_exe: str = "";
+    match curl_r {
+        Result::Ok(p) => { curl_exe = p; },
+        Result::Err(_e) => {
+            for _ui in 0..len(urls) {
+                push(out, http_make_error("curl not found in PATH"));
+            };
+            return out;
+        },
+    };
+
+    let tmp: str = http_tmp_dir();
+    let pid_self: i32 = 0; // not strictly needed, but randomness helps
+    let mut pids: [i32] = [];
+    let mut body_paths: [str] = [];
+    let mut hdr_paths: [str] = [];
+
+    for ui in 0..len(urls) {
+        let body_path: str = "{tmp}/oscanrss_body_{pid_self}_{ui}.bin";
+        let hdr_path: str = "{tmp}/oscanrss_hdr_{pid_self}_{ui}.txt";
+        push(body_paths, body_path);
+        push(hdr_paths, hdr_path);
+
+        let t_str: str = i32_to_str(timeout_sec);
+        // -s silent, -S show errors, -L follow redirects,
+        // --max-time total time, -D dump headers, -o body.
+        let args: [str] = [
+            "-sSL",
+            "--max-time", t_str,
+            "-A", "OscanRss/1.0",
+            "-D", hdr_path,
+            "-o", body_path,
+            urls[ui],
+        ];
+        let pid: i32 = proc_spawn(curl_exe, args);
+        push(pids, pid);
+    };
+
+    // Wait for all and build responses
+    for wi in 0..len(pids) {
+        let exit_code: i32 = proc_wait(pids[wi]);
+        let mut resp: HttpResponse = http_make_error("");
+
+        if file_exists(hdr_paths[wi]) {
+            let hdr_r: Result<str, str> = read_file(hdr_paths[wi]);
+            match hdr_r {
+                Result::Ok(hdr_text) => { resp = http_parse_curl_headers(hdr_text); },
+                Result::Err(e) => { resp = http_make_error("read header: {e}"); },
+            };
+        } else {
+            resp = http_make_error("curl exit {exit_code}: no headers");
+        };
+
+        if str_len(resp.error) == 0 {
+            if file_exists(body_paths[wi]) {
+                let body_r: Result<str, str> = read_file(body_paths[wi]);
+                match body_r {
+                    Result::Ok(body_text) => { resp.body = body_text; },
+                    Result::Err(e2) => { resp = http_make_error("read body: {e2}"); },
+                };
+            };
+        };
+
+        // If curl failed outright (non-zero exit) and we had no parsed
+        // status, surface that.
+        if exit_code != 0 and resp.status_code == 0 and str_len(resp.error) == 0 {
+            resp = http_make_error("curl exit {exit_code}");
+        };
+
+        // Cleanup temp files
+        let _dh: Result<str, str> = file_delete(hdr_paths[wi]);
+        let _db: Result<str, str> = file_delete(body_paths[wi]);
+
+        push(out, resp);
+    };
+
+    out
+}
