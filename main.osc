@@ -209,6 +209,10 @@ fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) ->
     };
 
     if len(items) == 0 {
+        let ct: str = str_to_lower(response.content_type);
+        if str_find(ct, "html") >= 0 {
+            return "Failed: {feed.name}: got HTML, not a feed (URL is not RSS/Atom)";
+        };
         return "No items: {feed.name} (not RSS/Atom?)";
     };
 
