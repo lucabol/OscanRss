@@ -149,6 +149,8 @@ fn! feed_candidate_urls(original: str) -> [str] {
 // (failed) HttpResponse. The URL that worked is written to `resolved_url`.
 fn! try_fetch_with_fallbacks(candidates: [str], resolved_url: [str]) -> HttpResponse {
     let mut last: HttpResponse = http_make_error("no candidates");
+    let mut best: HttpResponse = http_make_error("no candidates");
+    let mut have_best: bool = false;
     for ci in 0..len(candidates) {
         let r: HttpResponse = http_fetch_url(candidates[ci], 5);
         last = r;
@@ -159,8 +161,16 @@ fn! try_fetch_with_fallbacks(candidates: [str], resolved_url: [str]) -> HttpResp
                 push(resolved_url, candidates[ci]);
                 return r;
             };
+            // Remember first successful 2xx response so we can surface
+            // a meaningful error (e.g. "got HTML, not a feed") rather
+            // than a later candidate's DNS/404 error.
+            if not have_best {
+                best = r;
+                have_best = true;
+            };
         };
     };
+    if have_best { return best; };
     last
 }
 
