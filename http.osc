@@ -339,39 +339,41 @@ fn! http_parse_curl_headers(hdr_text: str) -> HttpResponse {
     }
 }
 
-// Fetch many URLs in parallel by spawning one curl per URL. Returns an
-// array of HttpResponse in the same order as `urls`. If curl is not
-// available, each response has an error set and the caller should fall
-// back to the synchronous path.
-fn! http_fetch_parallel(urls: [str], timeout_sec: i32) -> [HttpResponse] {
-    let mut out: [HttpResponse] = [];
-    let curl_r: Result<str, str> = path_find_exec("curl");
-    let mut curl_exe: str = "";
-    match curl_r {
-        Result::Ok(p) => { curl_exe = p; },
-        Result::Err(_e) => {
-            for _ui in 0..len(urls) {
-                push(out, http_make_error("curl not found in PATH"));
-            };
-            return out;
-        },
-    };
+struct ParallelFetch {
+    pids: [i32],
+    body_paths: [str],
+    hdr_paths: [str],
+    curl_ok: bool,
+}
 
-    let tmp: str = http_tmp_dir();
-    let pid_self: i32 = 0; // not strictly needed, but randomness helps
+// Spawn a curl subprocess for each URL. Returns state that
+// http_parallel_finish_one reads from, one entry at a time. If curl is
+// missing, returns a state with curl_ok=false and no pids.
+fn! http_parallel_start(urls: [str], timeout_sec: i32) -> ParallelFetch {
     let mut pids: [i32] = [];
     let mut body_paths: [str] = [];
     let mut hdr_paths: [str] = [];
 
+    let curl_r: Result<str, str> = path_find_exec("curl");
+    let mut curl_exe: str = "";
+    let mut have_curl: bool = false;
+    match curl_r {
+        Result::Ok(p) => { curl_exe = p; have_curl = true; },
+        Result::Err(_e) => {},
+    };
+
+    if not have_curl {
+        return ParallelFetch { pids: pids, body_paths: body_paths, hdr_paths: hdr_paths, curl_ok: false };
+    };
+
+    let tmp: str = http_tmp_dir();
+    let t_str: str = i32_to_str(timeout_sec);
     for ui in 0..len(urls) {
-        let body_path: str = "{tmp}/oscanrss_body_{pid_self}_{ui}.bin";
-        let hdr_path: str = "{tmp}/oscanrss_hdr_{pid_self}_{ui}.txt";
+        let body_path: str = "{tmp}/oscanrss_body_{ui}.bin";
+        let hdr_path: str = "{tmp}/oscanrss_hdr_{ui}.txt";
         push(body_paths, body_path);
         push(hdr_paths, hdr_path);
 
-        let t_str: str = i32_to_str(timeout_sec);
-        // -s silent, -S show errors, -L follow redirects,
-        // --max-time total time, -D dump headers, -o body.
         let args: [str] = [
             "-sSL",
             "--max-time", t_str,
@@ -384,43 +386,60 @@ fn! http_fetch_parallel(urls: [str], timeout_sec: i32) -> [HttpResponse] {
         push(pids, pid);
     };
 
-    // Wait for all and build responses
-    for wi in 0..len(pids) {
-        let exit_code: i32 = proc_wait(pids[wi]);
-        let mut resp: HttpResponse = http_make_error("");
+    ParallelFetch { pids: pids, body_paths: body_paths, hdr_paths: hdr_paths, curl_ok: true }
+}
 
-        if file_exists(hdr_paths[wi]) {
-            let hdr_r: Result<str, str> = read_file(hdr_paths[wi]);
-            match hdr_r {
-                Result::Ok(hdr_text) => { resp = http_parse_curl_headers(hdr_text); },
-                Result::Err(e) => { resp = http_make_error("read header: {e}"); },
-            };
-        } else {
-            resp = http_make_error("curl exit {exit_code}: no headers");
+// Wait for the `idx`-th spawned curl and return its HttpResponse.
+fn! http_parallel_finish_one(state: ParallelFetch, idx: i32) -> HttpResponse {
+    if not state.curl_ok {
+        return http_make_error("curl not found in PATH");
+    };
+    let exit_code: i32 = proc_wait(state.pids[idx]);
+    let mut resp: HttpResponse = http_make_error("");
+
+    if file_exists(state.hdr_paths[idx]) {
+        let hdr_r: Result<str, str> = read_file(state.hdr_paths[idx]);
+        match hdr_r {
+            Result::Ok(hdr_text) => { resp = http_parse_curl_headers(hdr_text); },
+            Result::Err(e) => { resp = http_make_error("read header: {e}"); },
         };
-
-        if str_len(resp.error) == 0 {
-            if file_exists(body_paths[wi]) {
-                let body_r: Result<str, str> = read_file(body_paths[wi]);
-                match body_r {
-                    Result::Ok(body_text) => { resp.body = body_text; },
-                    Result::Err(e2) => { resp = http_make_error("read body: {e2}"); },
-                };
-            };
-        };
-
-        // If curl failed outright (non-zero exit) and we had no parsed
-        // status, surface that.
-        if exit_code != 0 and resp.status_code == 0 and str_len(resp.error) == 0 {
-            resp = http_make_error("curl exit {exit_code}");
-        };
-
-        // Cleanup temp files
-        let _dh: Result<str, str> = file_delete(hdr_paths[wi]);
-        let _db: Result<str, str> = file_delete(body_paths[wi]);
-
-        push(out, resp);
+    } else {
+        resp = http_make_error("curl exit {exit_code}: no headers");
     };
 
+    if str_len(resp.error) == 0 {
+        if file_exists(state.body_paths[idx]) {
+            let body_r: Result<str, str> = read_file(state.body_paths[idx]);
+            match body_r {
+                Result::Ok(body_text) => { resp.body = body_text; },
+                Result::Err(e2) => { resp = http_make_error("read body: {e2}"); },
+            };
+        };
+    };
+
+    if exit_code != 0 and resp.status_code == 0 and str_len(resp.error) == 0 {
+        resp = http_make_error("curl exit {exit_code}");
+    };
+
+    let _dh: Result<str, str> = file_delete(state.hdr_paths[idx]);
+    let _db: Result<str, str> = file_delete(state.body_paths[idx]);
+
+    resp
+}
+
+// Convenience: spawn + wait-all. Progress-aware callers should use the
+// start / finish_one pair directly so they can render between waits.
+fn! http_fetch_parallel(urls: [str], timeout_sec: i32) -> [HttpResponse] {
+    let state: ParallelFetch = http_parallel_start(urls, timeout_sec);
+    let mut out: [HttpResponse] = [];
+    if not state.curl_ok {
+        for _ui in 0..len(urls) {
+            push(out, http_make_error("curl not found in PATH"));
+        };
+        return out;
+    };
+    for wi in 0..len(state.pids) {
+        push(out, http_parallel_finish_one(state, wi));
+    };
     out
 }

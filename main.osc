@@ -260,38 +260,84 @@ fn! fetch_and_track(feeds: [Feed], idx: i32, posts: [Post], read_guids: map, fai
     r
 }
 
-// Refreshes every feed, rebuilding `failed_feeds` from scratch. Runs
+// Render a full-screen loading overlay with a progress bar.
+fn! render_loading(w: i32, h: i32, done: i32, total: i32, label: str) {
+    canvas_clear(BG_COLOR);
+
+    let title: str = "OscanRss - Loading feeds";
+    let title_x: i32 = (w - str_len(title) * 8) / 2;
+    gfx_draw_text(title_x, h / 2 - 60, title, TITLE_COLOR, 0);
+
+    let msg: str = "{label}  ({done}/{total})";
+    let msg_x: i32 = (w - str_len(msg) * 8) / 2;
+    gfx_draw_text(msg_x, h / 2 - 30, msg, TEXT_COLOR, 0);
+
+    // Progress bar
+    let bar_w: i32 = if w < 520 { w - 80 } else { 480 };
+    let bar_h: i32 = 14;
+    let bar_x: i32 = (w - bar_w) / 2;
+    let bar_y: i32 = h / 2;
+    gfx_fill_rect(bar_x - 1, bar_y - 1, bar_w + 2, bar_h + 2, BORDER_COLOR);
+    gfx_fill_rect(bar_x, bar_y, bar_w, bar_h, PANEL_BG);
+    let fill_w: i32 = if total > 0 { (bar_w * done) / total } else { 0 };
+    if fill_w > 0 {
+        gfx_fill_rect(bar_x, bar_y, fill_w, bar_h, UNREAD_COLOR);
+    };
+
+    canvas_flush();
+}
+
+
 // the initial fetch in parallel using curl; feeds that fail the first
 // pass are retried serially with URL fallback rewriting.
-fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map, failed_feeds: map) -> str {
+fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map,
+                      failed_feeds: map, show_progress: bool) -> str {
     let mut n_ok: i32 = 0;
     let mut n_fail: i32 = 0;
+    let total: i32 = len(feeds);
 
-    // Collect stored URLs in order.
     let mut urls: [str] = [];
-    for fu in 0..len(feeds) {
+    for fu in 0..total {
         push(urls, feeds[fu].url);
     };
 
-    let responses: [HttpResponse] = http_fetch_parallel(urls, 8);
+    let w0: i32 = canvas_width();
+    let h0: i32 = canvas_height();
+    if show_progress and total > 0 {
+        render_loading(w0, h0, 0, total, "Starting...");
+    };
+
+    let state: ParallelFetch = http_parallel_start(urls, 8);
     let mut need_fallback: [i32] = [];
 
-    for ra in 0..len(feeds) {
-        let resp: HttpResponse = responses[ra];
-        let msg: str = apply_feed_response(feeds, ra, resp, posts);
-        let failed: bool = str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:");
-        let key: str = i32_to_str(feeds[ra].id);
-        if failed {
-            // Retry with URL-fallback logic serially.
-            push(need_fallback, ra);
-        } else {
-            map_delete(failed_feeds, key);
-            n_ok += 1;
+    if state.curl_ok {
+        for ra in 0..total {
+            if show_progress {
+                render_loading(w0, h0, ra, total, "Fetching: {feeds[ra].name}");
+            };
+            let resp: HttpResponse = http_parallel_finish_one(state, ra);
+            let msg: str = apply_feed_response(feeds, ra, resp, posts);
+            let failed: bool = str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:");
+            let key: str = i32_to_str(feeds[ra].id);
+            if failed {
+                push(need_fallback, ra);
+            } else {
+                map_delete(failed_feeds, key);
+                n_ok += 1;
+            };
+        };
+    } else {
+        for rb in 0..total {
+            push(need_fallback, rb);
         };
     };
 
     for nfi in 0..len(need_fallback) {
         let idx: i32 = need_fallback[nfi];
+        if show_progress {
+            render_loading(w0, h0, total - len(need_fallback) + nfi, total,
+                           "Retrying: {feeds[idx].name}");
+        };
         let r: str = fetch_feed_posts(feeds, idx, posts, read_guids);
         let key2: str = i32_to_str(feeds[idx].id);
         if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
@@ -301,6 +347,10 @@ fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map, failed_feed
             map_delete(failed_feeds, key2);
             n_ok += 1;
         };
+    };
+
+    if show_progress {
+        render_loading(w0, h0, total, total, "Done");
     };
 
     "Refreshed {n_ok} ok, {n_fail} failed"
@@ -739,7 +789,7 @@ fn! main() {
     // On startup, try to fetch every feed so errored feeds can be
     // marked in the tree. This blocks until all feeds are tried.
     if len(feeds) > 0 {
-        status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds);
+        status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds, true);
     };
 
     while canvas_alive() {
@@ -965,7 +1015,7 @@ fn! main() {
             // 'R' = refresh all
             if key == 82 {
                 status_msg = "Refreshing all feeds...";
-                status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds);
+                status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds, true);
             };
 
             // 'm' = toggle read/unread
