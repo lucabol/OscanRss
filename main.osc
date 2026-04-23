@@ -176,8 +176,101 @@ fn! try_fetch_with_fallbacks(candidates: [str], resolved_url: [str]) -> HttpResp
     last
 }
 
+// Parse an RFC 822 month abbreviation ("Jan".."Dec") into 1..12.
+// Returns -1 if unrecognized.
+fn! month_abbrev_to_num(s: str) -> i32 {
+    if str_eq(s, "Jan") { 1 }
+    else if str_eq(s, "Feb") { 2 }
+    else if str_eq(s, "Mar") { 3 }
+    else if str_eq(s, "Apr") { 4 }
+    else if str_eq(s, "May") { 5 }
+    else if str_eq(s, "Jun") { 6 }
+    else if str_eq(s, "Jul") { 7 }
+    else if str_eq(s, "Aug") { 8 }
+    else if str_eq(s, "Sep") { 9 }
+    else if str_eq(s, "Oct") { 10 }
+    else if str_eq(s, "Nov") { 11 }
+    else if str_eq(s, "Dec") { 12 }
+    else { -1 }
+}
+
+// Parse a feed pub_date into a YYYYMMDD integer. Returns -1 if the
+// date can't be recognized. Handles:
+//   - ISO 8601:  "2025-04-20T00:00:00Z" / "2025-04-20"
+//   - RFC 822:   "Mon, 05 Jan 2026 19:57:42 +0200" / "5 Jan 2026 ..."
+fn! parse_pub_date_ymd(s: str) -> i32 {
+    let n: i32 = str_len(s);
+    if n == 0 { return -1; };
+
+    // ISO path: YYYY-MM-DD as the first 10 bytes.
+    if n >= 10 {
+        let chars: [i32] = str_to_chars(s);
+        if chars[4] == 45 and chars[7] == 45 {
+            let yr: Result<i32, str> = parse_i32(str_slice(s, 0, 4));
+            let mo: Result<i32, str> = parse_i32(str_slice(s, 5, 7));
+            let dy: Result<i32, str> = parse_i32(str_slice(s, 8, 10));
+            match yr {
+                Result::Ok(y) => {
+                    match mo {
+                        Result::Ok(m) => {
+                            match dy {
+                                Result::Ok(d) => { return y * 10000 + m * 100 + d; },
+                                Result::Err(_e) => {},
+                            };
+                        },
+                        Result::Err(_e) => {},
+                    };
+                },
+                Result::Err(_e) => {},
+            };
+        };
+    };
+
+    // RFC 822 path: scan whitespace-separated tokens for a month
+    // abbreviation; day = preceding token, year = following token.
+    let toks: [str] = str_split(s, " ");
+    for ti in 0..len(toks) {
+        let tok: str = toks[ti];
+        // Strip trailing comma (e.g. "Mon,").
+        let tn: i32 = str_len(tok);
+        if tn == 0 { continue; };
+        let mo2: i32 = month_abbrev_to_num(tok);
+        if mo2 > 0 and ti >= 1 and ti + 1 < len(toks) {
+            let dr: Result<i32, str> = parse_i32(toks[ti - 1]);
+            let yr2: Result<i32, str> = parse_i32(toks[ti + 1]);
+            match dr {
+                Result::Ok(d2) => {
+                    match yr2 {
+                        Result::Ok(y2) => { return y2 * 10000 + mo2 * 100 + d2; },
+                        Result::Err(_e) => {},
+                    };
+                },
+                Result::Err(_e) => {},
+            };
+        };
+    };
+
+    -1
+}
+
+// Compute the YYYYMMDD cutoff one month before the current UTC day.
+// Posts older than this are discarded at ingestion time.
+fn! recent_post_cutoff_ymd() -> i32 {
+    let now: i64 = time_now();
+    let y: i32 = time_utc_year(now);
+    let m: i32 = time_utc_month(now);
+    let d: i32 = time_utc_day(now);
+    if m > 1 {
+        (y * 10000) + ((m - 1) * 100) + d
+    } else {
+        ((y - 1) * 10000) + (12 * 100) + d
+    }
+}
+
 // Apply an already-fetched HttpResponse to a feed: replace its posts and
-// return a status message. Does NOT try URL fallbacks.
+// return a status message. Does NOT try URL fallbacks. Posts older than
+// one month (based on pub_date) are dropped at ingestion time so the UI
+// stays snappy and storage stays small.
 fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
                         posts: [Post]) -> str {
     let feed: Feed = feeds[idx];
@@ -201,9 +294,14 @@ fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
         ri -= 1;
     };
 
-    // Add new posts
+    // Add new posts, skipping anything older than one month. Posts with
+    // unparseable dates are kept so we don't silently drop content.
+    let cutoff: i32 = recent_post_cutoff_ymd();
+    let mut kept: i32 = 0;
     for fi2 in 0..len(items) {
         let item: RssItem = items[fi2];
+        let ymd: i32 = parse_pub_date_ymd(item.pub_date);
+        if ymd >= 0 and ymd < cutoff { continue; };
         let post: Post = Post {
             feed_id: feed.id,
             title: item.title,
@@ -213,6 +311,7 @@ fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
             guid: item.guid,
         };
         push(posts, post);
+        kept += 1;
     };
 
     if len(items) == 0 {
@@ -223,7 +322,7 @@ fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
         return "No items: {feed.name} (not RSS/Atom?)";
     };
 
-    "Loaded {len(items)} posts from {feed.name}"
+    "Loaded {kept} posts from {feed.name}"
 }
 
 fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) -> str {
