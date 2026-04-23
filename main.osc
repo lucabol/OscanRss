@@ -60,6 +60,14 @@ fn! count_unread(posts: [Post], feed_id: i32, read_guids: map) -> i32 {
     count
 }
 
+fn! count_posts_for_feed(posts: [Post], feed_id: i32) -> i32 {
+    let mut count: i32 = 0;
+    for ci in 0..len(posts) {
+        if posts[ci].feed_id == feed_id { count += 1; };
+    };
+    count
+}
+
 fn! count_group_unread(posts: [Post], feeds: [Feed], group_id: i32, read_guids: map) -> i32 {
     let mut total: i32 = 0;
     for cg in 0..len(feeds) {
@@ -352,7 +360,7 @@ fn! fetch_feed_posts(feeds: [Feed], idx: i32, posts: [Post], read_guids: map) ->
 fn! fetch_and_track(feeds: [Feed], idx: i32, posts: [Post], read_guids: map, failed_feeds: map) -> str {
     let r: str = fetch_feed_posts(feeds, idx, posts, read_guids);
     let key: str = i32_to_str(feeds[idx].id);
-    if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+    if str_starts_with(r, "Failed:") {
         map_set(failed_feeds, key, r);
     } else {
         map_delete(failed_feeds, key);
@@ -417,7 +425,7 @@ fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map,
             };
             let resp: HttpResponse = http_parallel_finish_one(state, ra);
             let msg: str = apply_feed_response(feeds, ra, resp, posts);
-            let failed: bool = str_starts_with(msg, "Failed:") or str_starts_with(msg, "No items:");
+            let failed: bool = str_starts_with(msg, "Failed:");
             let key: str = i32_to_str(feeds[ra].id);
             if failed {
                 // If the server responded 2xx with HTML, the URL is
@@ -451,7 +459,7 @@ fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map,
         };
         let r: str = fetch_feed_posts(feeds, idx, posts, read_guids);
         let key2: str = i32_to_str(feeds[idx].id);
-        if str_starts_with(r, "Failed:") or str_starts_with(r, "No items:") {
+        if str_starts_with(r, "Failed:") {
             map_set(failed_feeds, key2, r);
             n_fail += 1;
         } else {
@@ -532,26 +540,28 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
         draw_y += ROW_H;
 
         // Draw feeds under this group if expanded.
-        // Two passes: healthy feeds first, failed feeds (in red) at the bottom.
+        // Three passes: feeds with posts, feeds with no posts (but no
+        // fetch error), then failed feeds (rendered red) at the bottom.
         if g.expanded {
-            for pass in 0..2 {
+            for pass in 0..3 {
                 for fi3 in 0..len(feeds) {
                     if feeds[fi3].group_id == g.id {
                         let fkey: str = i32_to_str(feeds[fi3].id);
                         let has_err: bool = map_has(failed_feeds, fkey);
-                        let is_err_pass: bool = pass == 1;
-                        if has_err == is_err_pass {
+                        let n_posts: i32 = count_posts_for_feed(posts, feeds[fi3].id);
+                        let bucket: i32 = if has_err { 2 } else if n_posts == 0 { 1 } else { 0 };
+                        if bucket == pass {
                             let fy: i32 = draw_y;
                             if fy >= py and fy < py + panel_h - ROW_H {
                                 if feeds[fi3].id == sel_feed {
                                     gfx_fill_rect(px, fy, tree_w - 1, ROW_H, SELECT_BG);
                                 };
 
-                                let marker: str = if has_err { "!" } else { "*" };
+                                let marker: str = if has_err { "!" } else if n_posts == 0 { "-" } else { "*" };
                                 let marker_color: i32 = if has_err { ERROR_COLOR } else { DIM_COLOR };
                                 gfx_draw_text(px + 24, fy + 4, marker, marker_color, 0);
                                 let fname: str = truncate_str(feeds[fi3].name, 18);
-                                let fname_color: i32 = if has_err { ERROR_COLOR } else { TEXT_COLOR };
+                                let fname_color: i32 = if has_err { ERROR_COLOR } else if n_posts == 0 { DIM_COLOR } else { TEXT_COLOR };
                                 gfx_draw_text(px + 36, fy + 4, fname, fname_color, 0);
 
                                 if not has_err {
@@ -585,7 +595,7 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
                      read_at_startup: map,
                      list_scroll: i32, panel_x: i32, panel_w: i32,
                      panel_h: i32, prev_btn: i32, list_h: i32,
-                     status_msg: str) -> i32 {
+                     status_msg: str, feeds: [Feed], failed_feeds: map) -> i32 {
     let py: i32 = CHROME_H;
     let max_y: i32 = py + list_h;
     gfx_fill_rect(panel_x, py, panel_w, list_h, BG_COLOR);
@@ -654,14 +664,39 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
     // Separator below post list
     gfx_line(panel_x, py + list_h, panel_x + panel_w, py + list_h, BORDER_COLOR);
 
-    // If nothing was rendered and the last status looks like a fetch
-    // error, display it inside the pane so it's obvious why.
+    // If nothing was rendered, show the most useful message. Prefer the
+    // stored per-feed error (with the URL that was tried) when the
+    // selected feed is in failed_feeds; otherwise fall back to the
+    // current status line if it looks like an error.
     if visible_idx == 0 and sel_feed > 0 {
-        let is_err: bool = str_starts_with(status_msg, "Failed:") or str_starts_with(status_msg, "No items:");
-        if is_err {
-            let max_chars: i32 = (panel_w - 24) / 8;
-            let msg_line: str = truncate_str(status_msg, max_chars);
-            gfx_draw_text(panel_x + 12, py + ROW_H + 12, msg_line, UNREAD_COLOR, 0);
+        let max_chars: i32 = (panel_w - 24) / 8;
+        let mut feed_url: str = "";
+        let mut feed_err: str = "";
+        for ffi in 0..len(feeds) {
+            if feeds[ffi].id == sel_feed {
+                feed_url = feeds[ffi].url;
+                let fkey2: str = i32_to_str(feeds[ffi].id);
+                if map_has(failed_feeds, fkey2) {
+                    feed_err = map_get(failed_feeds, fkey2);
+                };
+            };
+        };
+
+        if str_len(feed_err) > 0 {
+            let line1: str = truncate_str(feed_err, max_chars);
+            gfx_draw_text(panel_x + 12, py + ROW_H + 12, line1, ERROR_COLOR, 0);
+            if str_len(feed_url) > 0 {
+                let line2: str = truncate_str("URL: {feed_url}", max_chars);
+                gfx_draw_text(panel_x + 12, py + ROW_H + 28, line2, DIM_COLOR, 0);
+            };
+        } else {
+            let is_err: bool = str_starts_with(status_msg, "Failed:") or str_starts_with(status_msg, "No items:");
+            if is_err {
+                let msg_line: str = truncate_str(status_msg, max_chars);
+                gfx_draw_text(panel_x + 12, py + ROW_H + 12, msg_line, UNREAD_COLOR, 0);
+            } else {
+                gfx_draw_text(panel_x + 12, py + ROW_H + 12, "No posts in the last month.", DIM_COLOR, 0);
+            };
         };
     };
 
@@ -1358,7 +1393,7 @@ fn! main() {
                                                     read_at_startup,
                                                     list_scroll, tree_w, panel_w,
                                                     panel_h, prev_btn, list_h,
-                                                    status_msg);
+                                                    status_msg, feeds, failed_feeds);
             if post_click >= 0 and is_normal {
                 sel_post = post_click;
                 content_scroll = 0;
