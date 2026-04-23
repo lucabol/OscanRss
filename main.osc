@@ -481,7 +481,8 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
 }
 
 fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
-                     read_guids: map, show_unread_only: bool,
+                     read_guids: map, filter_mode: i32,
+                     read_at_startup: map,
                      list_scroll: i32, panel_x: i32, panel_w: i32,
                      panel_h: i32, prev_btn: i32, list_h: i32,
                      status_msg: str) -> i32 {
@@ -500,7 +501,18 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
     for pi in 0..len(posts) {
         let pi_match: bool = posts[pi].feed_id == sel_feed;
         let is_read: bool = map_has(read_guids, posts[pi].guid);
-        let pi_filtered: bool = show_unread_only and is_read;
+        let was_read_at_startup: bool = map_has(read_at_startup, posts[pi].guid);
+        // filter_mode: 0=session, 1=all, 2=unread
+        let pi_filtered: bool = if filter_mode == 2 {
+            is_read
+        } else if filter_mode == 1 {
+            false
+        } else {
+            // Session view: only posts unread at startup, still shown
+            // when they've been read this session (so clicking doesn't
+            // make them vanish) — rendered dimmed via is_read below.
+            was_read_at_startup
+        };
 
         if pi_match and not pi_filtered {
             if draw_y >= py + ROW_H and draw_y < max_y - ROW_H {
@@ -729,7 +741,7 @@ fn! render_help(w: i32, h: i32) {
     gfx_draw_text(hx, hy, "d", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Delete selected", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "r", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh feed", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "R", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh all", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "u", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle unread filter", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "u", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Cycle filter (session/unread/all)", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "m", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle read/unread", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "M", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Mark all read", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "?", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle help", TEXT_COLOR, 0); hy += 16;
@@ -758,7 +770,10 @@ fn! main() {
     let mut sel_feed: i32 = -1;
     let mut sel_post: i32 = -1;
     let mut focus_panel: i32 = 0; // 0=tree, 1=posts, 2=content
-    let mut show_unread_only: bool = true;
+    // filter_mode: 0 = session (posts unread at startup, still visible when
+    // read this session), 1 = All, 2 = Unread.
+    let mut filter_mode: i32 = 0;
+    let mut read_at_startup: map = map_new();
     let mut show_help: bool = false;
     let mut tree_scroll: i32 = 0;
     let mut list_scroll: i32 = 0;
@@ -803,6 +818,15 @@ fn! main() {
         status_msg = refresh_all_feeds(feeds, posts, read_guids, failed_feeds, true);
     };
 
+    // Snapshot the read-guid set *after* the startup fetch so the
+    // "session" filter can show every post that was unread when the
+    // app started — even after the user reads some of them this run.
+    for si in 0..len(posts) {
+        if map_has(read_guids, posts[si].guid) {
+            map_set(read_at_startup, posts[si].guid, "1");
+        };
+    };
+
     while canvas_alive() {
         let key: i32 = canvas_key();
         let w: i32 = canvas_width();
@@ -832,8 +856,10 @@ fn! main() {
             if key == 9 { // Tab
                 focus_panel = mod_i32(focus_panel + 1, 3);
             };
-            if key == 117 { // 'u'
-                show_unread_only = not show_unread_only;
+            if key == 117 { // 'u' — cycle: session -> unread -> all -> session
+                if filter_mode == 0 { filter_mode = 2; }
+                else if filter_mode == 2 { filter_mode = 1; }
+                else { filter_mode = 0; };
             };
 
             // Navigation
@@ -898,7 +924,7 @@ fn! main() {
                         let mut next_post: i32 = -1;
                         let mut found_cur: bool = false;
                         for pn in 0..len(posts) {
-                            let pn_ok: bool = posts[pn].feed_id == sel_feed and not (show_unread_only and map_has(read_guids, posts[pn].guid));
+                            let pn_ok: bool = posts[pn].feed_id == sel_feed and (if filter_mode == 2 { not map_has(read_guids, posts[pn].guid) } else if filter_mode == 1 { true } else { not map_has(read_at_startup, posts[pn].guid) });
                             if pn_ok {
                                 if found_cur and next_post < 0 { next_post = pn; };
                                 if pn == sel_post { found_cur = true; };
@@ -916,7 +942,7 @@ fn! main() {
                         let mut prev_post: i32 = -1;
                         let mut found_sel: bool = false;
                         for pp in 0..len(posts) {
-                            let pp_ok: bool = posts[pp].feed_id == sel_feed and not (show_unread_only and map_has(read_guids, posts[pp].guid));
+                            let pp_ok: bool = posts[pp].feed_id == sel_feed and (if filter_mode == 2 { not map_has(read_guids, posts[pp].guid) } else if filter_mode == 1 { true } else { not map_has(read_at_startup, posts[pp].guid) });
                             if pp_ok {
                                 if pp == sel_post { found_sel = true; };
                                 if not found_sel { prev_post = pp; };
@@ -1089,10 +1115,14 @@ fn! main() {
         let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H, "Del", prev_btn);
         let import_clicked: bool = ui_button(btn_x + 230, btn_base_y, 60, BTN_H, "Import", prev_btn);
 
-        // View-filter buttons in chrome: "All" and "Unread" toggle
-        // what the post list shows.
-        let all_clicked: bool = ui_button(w - 160, 4, 70, BTN_H, "All", prev_btn);
-        let unread_clicked: bool = ui_button(w - 84, 4, 76, BTN_H, "Unread", prev_btn);
+        // View-filter toggle buttons: "All" and "Unread". When both
+        // are off (pressed state cleared), the post list shows the
+        // session view — posts that were unread at startup, with ones
+        // read this session rendered dimmed.
+        let all_selected: bool = filter_mode == 1;
+        let unread_selected: bool = filter_mode == 2;
+        let all_clicked: bool = ui_toggle_button(w - 160, 4, 70, BTN_H, "All", all_selected, prev_btn);
+        let unread_clicked: bool = ui_toggle_button(w - 84, 4, 76, BTN_H, "Unread", unread_selected, prev_btn);
 
         // Handle button clicks (in Normal mode)
         if is_normal and not show_help {
@@ -1136,10 +1166,10 @@ fn! main() {
                 dialog_field = 0;
             };
             if all_clicked {
-                show_unread_only = false;
+                if filter_mode == 1 { filter_mode = 0; } else { filter_mode = 1; };
             };
             if unread_clicked {
-                show_unread_only = true;
+                if filter_mode == 2 { filter_mode = 0; } else { filter_mode = 2; };
             };
         };
 
@@ -1195,7 +1225,8 @@ fn! main() {
         // Post list
         if sel_feed >= 0 {
             let post_click: i32 = render_post_list(posts, sel_feed, sel_post,
-                                                    read_guids, show_unread_only,
+                                                    read_guids, filter_mode,
+                                                    read_at_startup,
                                                     list_scroll, tree_w, panel_w,
                                                     panel_h, prev_btn, list_h,
                                                     status_msg);
