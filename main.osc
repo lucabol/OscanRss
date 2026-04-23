@@ -642,6 +642,7 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
 }
 
 fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
+                  cur1: [i32], cur2: [i32],
                   focused_field: i32, key: i32, prev_btn: i32,
                   w: i32, h: i32) -> i32 {
     // Returns: 0=pending, 1=OK, 2=Cancel
@@ -675,30 +676,30 @@ fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
     match mode {
         AppMode::AddGroup => {
             gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
-            let _f1: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+            let _f1: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
         },
         AppMode::EditGroup => {
             gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
-            let _f2: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+            let _f2: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
         },
         AppMode::AddFeed => {
             gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
-            let _f3: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, focused_field == 0, prev_btn, key);
+            let _f3: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, focused_field == 0, prev_btn, key);
             gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
-            let _f4: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, focused_field == 1, prev_btn, key);
+            let _f4: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, cur2, focused_field == 1, prev_btn, key);
         },
         AppMode::EditFeed => {
             gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
-            let _f5: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, focused_field == 0, prev_btn, key);
+            let _f5: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, focused_field == 0, prev_btn, key);
             gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
-            let _f6: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, focused_field == 1, prev_btn, key);
+            let _f6: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, cur2, focused_field == 1, prev_btn, key);
         },
         AppMode::Confirm => {
             gfx_draw_text(dx + 10, dy + 50, "Are you sure you want to delete?", TEXT_COLOR, 0);
         },
         AppMode::ImportOpml => {
             gfx_draw_text(dx + 10, dy + 34, "OPML file path:", TEXT_COLOR, 0);
-            let _fi: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, true, prev_btn, key);
+            let _fi: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
             gfx_draw_text(dx + 10, dy + 78, "Groups & feeds are appended; duplicates skipped.", DIM_COLOR, 0);
         },
         _ => {},
@@ -788,6 +789,8 @@ fn! main() {
     let mut mode: AppMode = AppMode::Normal;
     let mut dialog_buf1: [i32] = [];
     let mut dialog_buf2: [i32] = [];
+    let mut dialog_cur1: [i32] = [0];
+    let mut dialog_cur2: [i32] = [0];
     let mut dialog_field: i32 = 0;
 
     // Link and image state
@@ -1008,14 +1011,18 @@ fn! main() {
                         mode = AppMode::AddFeed;
                         while len(dialog_buf1) > 0 { pop(dialog_buf1); };
                         while len(dialog_buf2) > 0 { pop(dialog_buf2); };
+                        dialog_cur1[0] = 0;
+                        dialog_cur2[0] = 0;
                         dialog_field = 0;
                     } else {
                         mode = AppMode::AddGroup;
                         while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                        dialog_cur1[0] = 0;
                     };
                 } else {
                     mode = AppMode::AddGroup;
                     while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                    dialog_cur1[0] = 0;
                 };
             };
 
@@ -1027,6 +1034,8 @@ fn! main() {
                             mode = AppMode::EditFeed;
                             str_to_buf(feeds[ef].name, dialog_buf1);
                             str_to_buf(feeds[ef].url, dialog_buf2);
+                            dialog_cur1[0] = len(dialog_buf1);
+                            dialog_cur2[0] = len(dialog_buf2);
                             dialog_field = 0;
                             break;
                         };
@@ -1036,6 +1045,7 @@ fn! main() {
                         if groups[eg].id == sel_group {
                             mode = AppMode::EditGroup;
                             str_to_buf(groups[eg].name, dialog_buf1);
+                            dialog_cur1[0] = len(dialog_buf1);
                             break;
                         };
                     };
@@ -1142,11 +1152,14 @@ fn! main() {
             if add_group_clicked {
                 mode = AppMode::AddGroup;
                 while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                dialog_cur1[0] = 0;
             };
             if add_feed_clicked and sel_group >= 0 {
                 mode = AppMode::AddFeed;
                 while len(dialog_buf1) > 0 { pop(dialog_buf1); };
                 while len(dialog_buf2) > 0 { pop(dialog_buf2); };
+                dialog_cur1[0] = 0;
+                dialog_cur2[0] = 0;
                 dialog_field = 0;
             };
             if edit_clicked {
@@ -1156,6 +1169,8 @@ fn! main() {
                             mode = AppMode::EditFeed;
                             str_to_buf(feeds[ef2].name, dialog_buf1);
                             str_to_buf(feeds[ef2].url, dialog_buf2);
+                            dialog_cur1[0] = len(dialog_buf1);
+                            dialog_cur2[0] = len(dialog_buf2);
                             dialog_field = 0;
                             break;
                         };
@@ -1165,6 +1180,7 @@ fn! main() {
                         if groups[eg2].id == sel_group {
                             mode = AppMode::EditGroup;
                             str_to_buf(groups[eg2].name, dialog_buf1);
+                            dialog_cur1[0] = len(dialog_buf1);
                             break;
                         };
                     };
@@ -1176,6 +1192,7 @@ fn! main() {
             if import_clicked {
                 mode = AppMode::ImportOpml;
                 while len(dialog_buf1) > 0 { pop(dialog_buf1); };
+                dialog_cur1[0] = 0;
                 dialog_field = 0;
             };
             if all_clicked {
@@ -1312,6 +1329,7 @@ fn! main() {
             };
 
             let dres: i32 = render_dialog(mode, dialog_buf1, dialog_buf2,
+                                          dialog_cur1, dialog_cur2,
                                            dialog_field, dialog_key, prev_btn, w, h);
 
             if dres == 1 { // OK

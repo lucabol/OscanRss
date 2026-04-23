@@ -106,7 +106,21 @@ fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> boo
     if clicked { not checked } else { checked }
 }
 
-fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32) -> bool {
+// Textbox with cursor, arrow-key navigation, and clipboard support.
+//
+// `cursor` is a single-element [i32] array holding the caret position
+// (0..=len(buf)). Caller owns it so the position survives frames.
+//
+// Recognized keys (in addition to printable 32..126):
+//   Left/Right arrows: move cursor one char.
+//   Backspace (8):     delete char before cursor.
+//   1 (Ctrl+A):        move cursor to start.
+//   5 (Ctrl+E):        move cursor to end.
+//   3 (Ctrl+C):        copy entire buffer to clipboard.
+//   24 (Ctrl+X):       cut entire buffer to clipboard.
+//   22 (Ctrl+V):       paste clipboard at cursor.
+fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], cursor: [i32],
+               focused: bool, prev_btn: i32, key: i32) -> bool {
     let h: i32 = 20;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
@@ -119,13 +133,79 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
     gfx_fill_rect(x, y, w, h, bg);
     gfx_rect(x, y, w, h, if focused { UI_ACCENT } else { UI_BORDER });
 
+    // Ensure cursor has a slot. Clamp if stale.
+    while len(cursor) < 1 { push(cursor, len(buf)); };
+    if cursor[0] < 0 { cursor[0] = 0; };
+    if cursor[0] > len(buf) { cursor[0] = len(buf); };
+
     if focused {
+        let pos: i32 = cursor[0];
         if key >= 32 and key <= 126 {
-            push(buf, key);
-        };
-        if key == 8 and len(buf) > 0 {
-            pop(buf);
-        };
+            // Insert char at cursor.
+            push(buf, 0);
+            let mut mv: i32 = len(buf) - 1;
+            while mv > pos {
+                buf[mv] = buf[mv - 1];
+                mv = mv - 1;
+            };
+            buf[pos] = key;
+            cursor[0] = pos + 1;
+        } else if key == 8 {
+            // Backspace: delete char before cursor.
+            if pos > 0 {
+                let mut mv2: i32 = pos - 1;
+                while mv2 < len(buf) - 1 {
+                    buf[mv2] = buf[mv2 + 1];
+                    mv2 = mv2 + 1;
+                };
+                pop(buf);
+                cursor[0] = pos - 1;
+            };
+        } else if key == 1001 {
+            // Left arrow.
+            if pos > 0 { cursor[0] = pos - 1; };
+        } else if key == 1002 {
+            // Right arrow.
+            if pos < len(buf) { cursor[0] = pos + 1; };
+        } else if key == 1 {
+            // Ctrl+A: jump to start.
+            cursor[0] = 0;
+        } else if key == 5 {
+            // Ctrl+E: jump to end.
+            cursor[0] = len(buf);
+        } else if key == 3 {
+            // Ctrl+C: copy entire buffer.
+            let _cc: i32 = clipboard_set(str_from_chars(buf));
+        } else if key == 24 {
+            // Ctrl+X: cut entire buffer.
+            let _cx: i32 = clipboard_set(str_from_chars(buf));
+            while len(buf) > 0 { pop(buf); };
+            cursor[0] = 0;
+        } else if key == 22 {
+            // Ctrl+V: paste clipboard at cursor.
+            let cr: Result<str, str> = clipboard_get();
+            match cr {
+                Result::Ok(cs) => {
+                    let chars: [i32] = str_to_chars(cs);
+                    for ci in 0..len(chars) {
+                        let ch: i32 = chars[ci];
+                        // Skip control chars (newlines, tabs) — single-line textbox.
+                        if ch >= 32 and ch <= 126 {
+                            let cp: i32 = cursor[0];
+                            push(buf, 0);
+                            let mut mv3: i32 = len(buf) - 1;
+                            while mv3 > cp {
+                                buf[mv3] = buf[mv3 - 1];
+                                mv3 = mv3 - 1;
+                            };
+                            buf[cp] = ch;
+                            cursor[0] = cp + 1;
+                        };
+                    };
+                },
+                Result::Err(_ce) => {},
+            };
+        } else {};
     };
 
     let text: str = str_from_chars(buf);
@@ -134,8 +214,8 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
     gfx_draw_text(x + pad, text_y, text, UI_FG, 0);
 
     if focused {
-        let cursor_x: i32 = x + pad + len(buf) * 8;
-        gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
+        let cx: i32 = x + pad + cursor[0] * 8;
+        gfx_fill_rect(cx, text_y, 1, 8, UI_FG);
     };
 
     if clicked { true }
