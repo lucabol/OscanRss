@@ -1,0 +1,70 @@
+// icon.osc — Build the OscanRss window/taskbar icon.
+//
+// Retro phosphor-green "R" glyph (16x16, scaled 2x to 32x32) inside a
+// CRT-style bezel — matches the visual style of Oscan's default "O"
+// icon (see osc_build_default_icon in Oscan's runtime) so the RSS
+// reader feels like a sibling of other Oscan apps.
+//
+// Pixel format is 0xAARRGGBB which canvas_set_icon forwards to the
+// underlying platform as uint32_t. i32 is signed so the alpha byte is
+// built with bshl / bor to avoid overflow of decimal literals.
+
+fn icon_alpha_opaque() -> i32 { bshl(255, 24) }
+
+// ARGB for phosphor green, with subtle scanline darkening on odd rows
+// so scaled-up pixels get a tiny CRT texture.
+fn icon_on_color(y: i32) -> i32 {
+    let g: i32 = if mod_i32(y, 2) == 1 { 200 } else { 255 };
+    bor(icon_alpha_opaque(),
+        bor(bshl(16, 16),   // R = 0x10
+            bor(bshl(g, 8), 32)))  // G = scanline, B = 0x20
+}
+
+fn icon_bezel_color() -> i32 {
+    bor(icon_alpha_opaque(),
+        bor(bshl(176, 16), bor(bshl(176, 8), 176)))  // 0xB0B0B0
+}
+
+fn icon_bg_color() -> i32 {
+    bor(icon_alpha_opaque(),
+        bor(bshl(8, 16), bor(bshl(12, 8), 8)))  // 0x080C08
+}
+
+// 16x16 bitmap of a retro "R".
+// Bit 15 is the leftmost pixel of each row.
+fn icon_glyph_row(row: i32) -> i32 {
+    if row == 1 { 16352 }       // 0x3FE0  ..RRRRRRRRR.....
+    else if row == 2 { 16368 }  // 0x3FF0  ..RRRRRRRRRR....
+    else if row == 3 { 12336 }  // 0x3030  ..RR......RR....
+    else if row == 4 { 12336 }
+    else if row == 5 { 12336 }
+    else if row == 6 { 12384 }  // 0x3060  ..RR.....RR.....
+    else if row == 7 { 16320 }  // 0x3FC0  ..RRRRRRRR......
+    else if row == 8 { 16256 }  // 0x3F80  ..RRRRRRR.......
+    else if row == 9 { 13824 }  // 0x3600  ..RR.RR.........
+    else if row == 10 { 13056 } // 0x3300  ..RR..RR........
+    else if row == 11 { 12672 } // 0x3180  ..RR...RR.......
+    else if row == 12 { 12480 } // 0x30C0  ..RR....RR......
+    else if row == 13 { 12384 } // 0x3060  ..RR.....RR.....
+    else { 0 }
+}
+
+// Build a 32x32 ARGB pixel buffer. 16x16 glyph is scaled 2x.
+fn! icon_build_pixels() -> [i32] {
+    let mut px: [i32] = [];
+    let n: i32 = 32;
+    for y in 0..n {
+        for x in 0..n {
+            let gy: i32 = y / 2;
+            let gx: i32 = x / 2;
+            let bits: i32 = icon_glyph_row(gy);
+            let on: bool = band(bshl(1, 15 - gx), bits) != 0;
+            let border: bool = x < 2 or y < 2 or x >= n - 2 or y >= n - 2;
+            let color: i32 = if on { icon_on_color(y) }
+                             else if border { icon_bezel_color() }
+                             else { icon_bg_color() };
+            push(px, color);
+        };
+    };
+    px
+}

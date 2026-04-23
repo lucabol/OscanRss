@@ -8,6 +8,7 @@ use "rss_parse.osc"
 use "html_render.osc"
 use "storage.osc"
 use "opml_parse.osc"
+use "icon.osc"
 use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
@@ -811,6 +812,10 @@ fn! main() {
         Result::Ok(_s) => {},
         Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
     };
+
+    // Replace Oscan's default retro "O" with our retro "R" icon.
+    let icon_px: [i32] = icon_build_pixels();
+    let _icon_res: Result<str, str> = canvas_set_icon(icon_px, 32, 32);
 
     // On startup, try to fetch every feed so errored feeds can be
     // marked in the tree. This blocks until all feeds are tried.
