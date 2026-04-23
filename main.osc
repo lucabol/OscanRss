@@ -745,6 +745,8 @@ fn! render_help(w: i32, h: i32) {
     gfx_draw_text(hx, hy, "u", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Cycle filter (session/unread/all)", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "m", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle read/unread", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "M", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Mark all read", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "Space", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Page article down (on post list)", TEXT_COLOR, 0); hy += 16;
+    gfx_draw_text(hx, hy, "Bksp", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Page article up (on post list)", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "?", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle help", TEXT_COLOR, 0); hy += 16;
     gfx_draw_text(hx, hy, "q", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Quit", TEXT_COLOR, 0); hy += 16;
 
@@ -991,6 +993,12 @@ fn! main() {
             // Backspace on post list: scroll content up one screen
             if key == 8 and focus_panel == 1 {
                 content_scroll = max_i32(0, content_scroll - content_h);
+            };
+
+            // Space on post list: page the article text down (Shift+Space
+            // / '-' to page back up). Mirrors classic feed-reader UX.
+            if key == 32 and focus_panel == 1 {
+                content_scroll = content_scroll + content_h;
             };
 
             // 'a' = add
