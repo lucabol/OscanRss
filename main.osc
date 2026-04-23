@@ -303,13 +303,22 @@ fn! apply_feed_response(feeds: [Feed], idx: i32, response: HttpResponse,
     };
 
     // Add new posts, skipping anything older than one month. Posts with
-    // unparseable dates are kept so we don't silently drop content.
+    // unparseable dates are kept — but capped per-feed so undated feeds
+    // (e.g. Paul Graham's essays scrape) don't flood the list with every
+    // historic item.
     let cutoff: i32 = recent_post_cutoff_ymd();
+    let max_undated: i32 = 30;
     let mut kept: i32 = 0;
+    let mut undated_kept: i32 = 0;
     for fi2 in 0..len(items) {
         let item: RssItem = items[fi2];
         let ymd: i32 = parse_pub_date_ymd(item.pub_date);
-        if ymd >= 0 and ymd < cutoff { continue; };
+        if ymd >= 0 {
+            if ymd < cutoff { continue; };
+        } else {
+            if undated_kept >= max_undated { continue; };
+            undated_kept += 1;
+        };
         let post: Post = Post {
             feed_id: feed.id,
             title: item.title,
