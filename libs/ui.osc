@@ -26,7 +26,7 @@ fn! ui_draw_text_core(x: i32, y: i32, text: str, color: i32,
                       ttf_h: i64, ttf_px: f64) {
     if ttf_h != (0 as i64) {
         let c: i32 = bor(color, -16777216);
-        let shift: i32 = (ttf_px * 0.8) as i32;
+        let shift: i32 = (ttf_px * 0.6) as i32;
         tt_draw_text(x, y + shift, text, ttf_h as handle, ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, ui_sc(), ui_sc(), 0);

@@ -388,7 +388,7 @@ fn! hr_space_w(ttf: handle, ttf_px: f64) -> i32 {
 fn! hr_draw(ttf: handle, ttf_px: f64, x: i32, y: i32, text: str, color: i32) {
     if hr_is_ttf(ttf) {
         let c: i32 = bor(color, -16777216);
-        let shift: i32 = (ttf_px * 0.8) as i32;
+        let shift: i32 = (ttf_px * 0.6) as i32;
         tt_draw_text(x, y + shift, text, ttf, ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, canvas_scale(), canvas_scale(), 0);
