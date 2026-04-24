@@ -31,3 +31,12 @@ enum AppMode {
     Confirm,
     ImportOpml,
 }
+
+// Font context passed through every rendering function so the TTF
+// toggle can swap proportional TrueType glyphs in/out of the whole
+// UI. `ttf` is stored as an i64 (handles are not allowed in struct
+// fields); 0 means "use the built-in 8x8 bitmap font".
+struct FontCtx {
+    ttf: i64,
+    ttf_px: f64,
+}

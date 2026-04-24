@@ -387,8 +387,11 @@ fn! hr_space_w(ttf: handle, ttf_px: f64) -> i32 {
 }
 fn! hr_draw(ttf: handle, ttf_px: f64, x: i32, y: i32, text: str, color: i32) {
     if hr_is_ttf(ttf) {
-        // tt_draw_text y is the baseline; shift down so top-of-box is at y.
-        tt_draw_text(x, y + (ttf_px * 0.8) as i32, text, ttf, ttf_px, color);
+        // Example convention: pass the line-top y directly as the baseline y.
+        // tt_draw_text renders the glyph body above the baseline; the
+        // descender extends down by ~(px * 0.25), so we shift our top-y
+        // down by the ascent (~px * 0.75) to keep glyphs inside [y, y+px].
+        tt_draw_text(x, y + (ttf_px * 0.75) as i32, text, ttf, ttf_px, color);
     } else {
         gfx_draw_text_scaled(x, y, text, color, canvas_scale(), canvas_scale(), 0);
     };
