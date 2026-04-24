@@ -26,7 +26,7 @@ fn! charh() -> i32 { 16 * sc() }
 // physical pixel count so every call site is automatically DPI-aware.
 fn! WIN_W() -> i32 { 1100 * sc() }
 fn! WIN_H() -> i32 { 700 * sc() }
-fn! TREE_W() -> i32 { 250 * sc() }
+fn! TREE_W() -> i32 { 300 * sc() }
 fn! STATUS_H() -> i32 { 24 * sc() }
 fn! CHROME_H() -> i32 { 30 * sc() }
 fn! ROW_H() -> i32 { 20 * sc() }
