@@ -458,9 +458,11 @@ fn! hr_render_text(text: str, x_ptr: [i32], y_ptr: [i32],
         // Draw if visible
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
             hr_draw(ttf, ttf_px, x_ptr[0], y_ptr[0], word, color);
-            // Underline for links
+            // Underline for links — sit just below the descender so it
+            // doesn't cross the glyph body. Baseline is at y+0.6*px, so
+            // descenders end around y+0.78*px; place the rule at ~0.82*px.
             if is_link {
-                let uy: i32 = if hr_is_ttf(ttf) { y_ptr[0] + (ttf_px * 0.95) as i32 } else { y_ptr[0] + 10 * canvas_scale() };
+                let uy: i32 = if hr_is_ttf(ttf) { y_ptr[0] + (ttf_px * 0.82) as i32 } else { y_ptr[0] + 10 * canvas_scale() };
                 gfx_line(x_ptr[0], uy, x_ptr[0] + word_w, uy, color);
             };
         };
@@ -792,17 +794,25 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
                 let draw_w: i32 = img_cache_w[cache_hit];
                 let draw_h: i32 = img_cache_h[cache_hit];
                 let avail: i32 = max_x - px - indent;
+                let sc_img: i32 = canvas_scale();
 
-                // Scale to fit available width
-                let mut blit_w: i32 = draw_w;
-                let mut blit_h: i32 = draw_h;
-                let mut blit_pixels: [i32] = img_cache_data[cache_hit];
+                // On HiDPI, upscale the cached image by canvas_scale so it
+                // looks proportional to the UI. Then clamp to available
+                // width so it never overflows the content pane.
+                let mut blit_w: i32 = draw_w * sc_img;
+                let mut blit_h: i32 = draw_h * sc_img;
+                let mut blit_pixels: [i32] = if sc_img > 1 and draw_w > 0 and draw_h > 0 {
+                    hr_img_scale(img_cache_data[cache_hit], draw_w, draw_h, blit_w, blit_h)
+                } else {
+                    img_cache_data[cache_hit]
+                };
                 if blit_w > avail and avail > 0 {
-                    blit_h = blit_h * avail / blit_w;
-                    blit_w = avail;
-                    if blit_h > 0 {
+                    let new_h: i32 = draw_h * avail / draw_w;
+                    if new_h > 0 {
                         blit_pixels = hr_img_scale(img_cache_data[cache_hit],
-                                                    draw_w, draw_h, blit_w, blit_h);
+                                                    draw_w, draw_h, avail, new_h);
+                        blit_w = avail;
+                        blit_h = new_h;
                     };
                 };
 
