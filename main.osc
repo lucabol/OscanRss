@@ -737,7 +737,8 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
                         content_scroll: i32,
                         content_links: [LinkRegion],
                         img_cache_idx: map, img_cache_data: [[i32]],
-                        img_cache_w: [i32], img_cache_h: [i32]) {
+                        img_cache_w: [i32], img_cache_h: [i32],
+                        ttf: handle, ttf_px: f64) {
     gfx_fill_rect(panel_x, content_y, panel_w, content_h, BG_COLOR);
 
     // Clear link regions from previous frame
@@ -800,7 +801,8 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
                                                  content_links,
                                                  img_cache_idx, img_cache_data,
                                                  img_cache_w, img_cache_h,
-                                                 post.link);
+                                                 post.link,
+                                                 ttf, ttf_px);
     };
 }
 
@@ -964,6 +966,14 @@ fn! main() {
     let mut img_cache_w: [i32] = [];
     let mut img_cache_h: [i32] = [];
 
+    // ─── TrueType font toggle ─────────────────────────────
+    // When loaded, a toggle button in the chrome lets the user switch the
+    // post-body renderer between the 8x8 bitmap font and a proportional
+    // TrueType font. Chrome/tree/list/dialogs keep the bitmap font because
+    // their layout math assumes monospace cells.
+    let mut ttf_font: handle = (0 as i64) as handle;
+    let mut ttf_enabled: bool = false;
+
     // Resizable pane layout
     let mut tree_w: i32 = TREE_W();
     let mut list_h: i32 = POST_SPLIT();
@@ -985,6 +995,34 @@ fn! main() {
     // Replace Oscan's default retro "O" with our retro "R" icon.
     let icon_px: [i32] = icon_build_pixels();
     let _icon_res: Result<str, str> = canvas_set_icon(icon_px, 32, 32);
+
+    // Try to load a TrueType font from well-known system paths. The
+    // toggle button is only shown if one loads successfully.
+    let ttf_candidates: [str] = [
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ];
+    for tci in 0..len(ttf_candidates) {
+        let tfp: str = ttf_candidates[tci];
+        let tfr: Result<str, str> = read_file(tfp);
+        match tfr {
+            Result::Ok(bytes) => {
+                let tlr: Result<handle, str> = tt_load(bytes);
+                match tlr {
+                    Result::Ok(hnd) => { ttf_font = hnd; },
+                    Result::Err(_) => {},
+                };
+            },
+            Result::Err(_) => {},
+        };
+        if (ttf_font as i64) != (0 as i64) { break; };
+    };
 
     // On startup, try to fetch every feed so errored feeds can be
     // marked in the tree. This blocks until all feeds are tried.
@@ -1311,6 +1349,12 @@ fn! main() {
         let all_clicked: bool = ui_toggle_button(w - sp(160), sp(4), sp(70), BTN_H(), "All", all_selected, prev_btn);
         let unread_clicked: bool = ui_toggle_button(w - sp(84), sp(4), sp(76), BTN_H(), "Unread", unread_selected, prev_btn);
 
+        // Aa (TrueType) toggle — only drawn when a TTF font loaded.
+        let mut aa_clicked: bool = false;
+        if (ttf_font as i64) != (0 as i64) {
+            aa_clicked = ui_toggle_button(w - sp(200), sp(4), sp(36), BTN_H(), "Aa", ttf_enabled, prev_btn);
+        };
+
         // Handle button clicks (in Normal mode)
         if is_normal and not show_help {
             if add_group_clicked {
@@ -1364,6 +1408,9 @@ fn! main() {
             };
             if unread_clicked {
                 if filter_mode == 2 { filter_mode = 0; } else { filter_mode = 2; };
+            };
+            if aa_clicked {
+                ttf_enabled = not ttf_enabled;
             };
         };
 
@@ -1438,11 +1485,14 @@ fn! main() {
 
         // Post content
         if sel_feed >= 0 {
+            let eff_ttf: handle = if ttf_enabled { ttf_font } else { (0 as i64) as handle };
+            let eff_ttf_px: f64 = 14.0 * (canvas_scale() as f64);
             render_post_content(posts, sel_post, tree_w, panel_w,
                                content_y, content_h, content_scroll,
                                content_links,
                                img_cache_idx, img_cache_data,
-                               img_cache_w, img_cache_h);
+                               img_cache_w, img_cache_h,
+                               eff_ttf, eff_ttf_px);
 
             // Link click detection: check if mouse click hit a link
             let lmx: i32 = canvas_mouse_x();
@@ -1721,5 +1771,6 @@ fn! main() {
         sleep_ms(16);
     };
 
+    if (ttf_font as i64) != (0 as i64) { tt_free(ttf_font); };
     canvas_close();
 }

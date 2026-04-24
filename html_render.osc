@@ -360,6 +360,40 @@ let HR_BULLET: i32 = 180 * 65536 + 180 * 256 + 180;
 fn! hr_line_h() -> i32 { 14 * canvas_scale() }
 let HR_IMG_MAX_W: i32 = 800;
 
+// ─── TTF toggle helpers ──────────────────────────────────
+// When `ttf` is the null handle, render with the 8x8 bitmap font via
+// gfx_draw_text_scaled; otherwise render proportional glyphs at
+// `ttf_px` pixels using Oscan's tt_draw_text / tt_text_width.
+fn! hr_is_ttf(ttf: handle) -> bool {
+    (ttf as i64) != (0 as i64)
+}
+fn! hr_line_h_ctx(ttf: handle, ttf_px: f64) -> i32 {
+    if hr_is_ttf(ttf) { (ttf_px * 1.35) as i32 } else { 14 * canvas_scale() }
+}
+fn! hr_word_w(ttf: handle, ttf_px: f64, word: str) -> i32 {
+    if hr_is_ttf(ttf) {
+        tt_text_width(ttf, word, ttf_px)
+    } else {
+        str_len(word) * 8 * canvas_scale()
+    }
+}
+fn! hr_space_w(ttf: handle, ttf_px: f64) -> i32 {
+    if hr_is_ttf(ttf) {
+        let w: i32 = tt_text_width(ttf, " ", ttf_px);
+        if w < 2 { (ttf_px * 0.3) as i32 } else { w }
+    } else {
+        8 * canvas_scale()
+    }
+}
+fn! hr_draw(ttf: handle, ttf_px: f64, x: i32, y: i32, text: str, color: i32) {
+    if hr_is_ttf(ttf) {
+        // tt_draw_text y is the baseline; shift down so top-of-box is at y.
+        tt_draw_text(x, y + (ttf_px * 0.8) as i32, text, ttf, ttf_px, color);
+    } else {
+        gfx_draw_text_scaled(x, y, text, color, canvas_scale(), canvas_scale(), 0);
+    };
+}
+
 fn hr_is_skip_tag(tag: str) -> bool {
     str_eq(tag, "script") or str_eq(tag, "style") or str_eq(tag, "head") or
     str_eq(tag, "meta") or str_eq(tag, "link") or str_eq(tag, "title") or
@@ -404,49 +438,56 @@ fn! hr_render_text(text: str, x_ptr: [i32], y_ptr: [i32],
                    color: i32, px: i32, max_x: i32,
                    min_y: i32, max_y: i32,
                    is_link: bool, link_href: str,
-                   links: [LinkRegion]) {
+                   links: [LinkRegion],
+                   ttf: handle, ttf_px: f64) {
     let normalized: str = hr_normalize(text);
     if str_len(str_trim(normalized)) == 0 { return; };
     let words: [str] = str_split(normalized, " ");
+    let lh: i32 = hr_line_h_ctx(ttf, ttf_px);
+    let sp_w: i32 = hr_space_w(ttf, ttf_px);
     for wi in 0..len(words) {
         let word: str = words[wi];
         if str_len(word) == 0 { continue; };
-        let word_w: i32 = str_len(word) * 8 * canvas_scale();
+        let word_w: i32 = hr_word_w(ttf, ttf_px, word);
         // Wrap to next line if needed
         if x_ptr[0] + word_w > max_x and x_ptr[0] > px {
-            y_ptr[0] = y_ptr[0] + hr_line_h();
+            y_ptr[0] = y_ptr[0] + lh;
             x_ptr[0] = px;
         };
         // Draw if visible
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text_scaled(x_ptr[0], y_ptr[0], word, color, canvas_scale(), canvas_scale(), 0);
+            hr_draw(ttf, ttf_px, x_ptr[0], y_ptr[0], word, color);
             // Underline for links
             if is_link {
-                gfx_line(x_ptr[0], y_ptr[0] + 10 * canvas_scale(), x_ptr[0] + word_w, y_ptr[0] + 10 * canvas_scale(), color);
+                let uy: i32 = if hr_is_ttf(ttf) { y_ptr[0] + (ttf_px * 0.95) as i32 } else { y_ptr[0] + 10 * canvas_scale() };
+                gfx_line(x_ptr[0], uy, x_ptr[0] + word_w, uy, color);
             };
         };
         // Register link region for each word
         if is_link and y_ptr[0] >= min_y and y_ptr[0] < max_y {
             let lr: LinkRegion = LinkRegion {
                 x: x_ptr[0], y: y_ptr[0],
-                w: word_w, h: hr_line_h(),
+                w: word_w, h: lh,
                 href: link_href,
             };
             push(links, lr);
         };
-        x_ptr[0] = x_ptr[0] + word_w + 8 * canvas_scale();
+        x_ptr[0] = x_ptr[0] + word_w + sp_w;
     };
 }
 
 // Render pre-formatted text (preserve whitespace and line breaks)
 fn! hr_render_pre(text: str, x_ptr: [i32], y_ptr: [i32],
-                  color: i32, px: i32, min_y: i32, max_y: i32) {
+                  color: i32, px: i32, min_y: i32, max_y: i32,
+                  ttf: handle, ttf_px: f64) {
     let lines: [str] = str_split(text, "\n");
+    let lh: i32 = hr_line_h_ctx(ttf, ttf_px);
+    let pad: i32 = if hr_is_ttf(ttf) { (ttf_px * 0.5) as i32 } else { 8 * canvas_scale() };
     for pli in 0..len(lines) {
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text_scaled(px + 8 * canvas_scale(), y_ptr[0], lines[pli], color, canvas_scale(), canvas_scale(), 0);
+            hr_draw(ttf, ttf_px, px + pad, y_ptr[0], lines[pli], color);
         };
-        y_ptr[0] = y_ptr[0] + hr_line_h();
+        y_ptr[0] = y_ptr[0] + lh;
         x_ptr[0] = px;
     };
 }
@@ -601,16 +642,18 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
                    links: [LinkRegion],
                    img_cache_idx: map, img_cache_data: [[i32]],
                    img_cache_w: [i32], img_cache_h: [i32],
-                   base_url: str) {
+                   base_url: str,
+                   ttf: handle, ttf_px: f64) {
     let node: HtmlNode = nodes[idx];
+    let lh: i32 = hr_line_h_ctx(ttf, ttf_px);
 
     // Text node
     if node.is_text {
         if in_pre {
-            hr_render_pre(node.text, x_ptr, y_ptr, color, px + indent, min_y, max_y);
+            hr_render_pre(node.text, x_ptr, y_ptr, color, px + indent, min_y, max_y, ttf, ttf_px);
         } else {
             hr_render_text(node.text, x_ptr, y_ptr, color, px + indent, max_x,
-                           min_y, max_y, is_link, link_href, links);
+                           min_y, max_y, is_link, link_href, links, ttf, ttf_px);
         };
         return;
     };
@@ -623,7 +666,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
 
     // Block element: start on new line
     if is_block and x_ptr[0] > px + indent {
-        y_ptr[0] = y_ptr[0] + hr_line_h();
+        y_ptr[0] = y_ptr[0] + lh;
         x_ptr[0] = px + indent;
     };
 
@@ -636,7 +679,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
 
     // Headings
     if str_eq(tag, "h1") or str_eq(tag, "h2") or str_eq(tag, "h3") {
-        y_ptr[0] = y_ptr[0] + hr_line_h();
+        y_ptr[0] = y_ptr[0] + lh;
         if str_eq(tag, "h1") { child_color = HR_H1; }
         else if str_eq(tag, "h2") { child_color = HR_H2; }
         else { child_color = HR_H3; };
@@ -647,7 +690,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
 
     // Paragraph spacing
     if str_eq(tag, "p") {
-        y_ptr[0] = y_ptr[0] + hr_line_h();
+        y_ptr[0] = y_ptr[0] + lh;
     };
 
     // Bold/strong
@@ -671,7 +714,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         child_color = HR_CODE;
         y_ptr[0] = y_ptr[0] + 4;
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_fill_rect(px + indent, y_ptr[0] - 2, max_x - px - indent, hr_line_h(), HR_PRE_BG);
+            gfx_fill_rect(px + indent, y_ptr[0] - 2, max_x - px - indent, lh, HR_PRE_BG);
         };
     };
 
@@ -687,25 +730,25 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         child_indent = indent + 16;
         child_color = HR_QUOTE;
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_fill_rect(px + indent + 4, y_ptr[0], 3, hr_line_h() * 3, HR_QUOTE_BAR);
+            gfx_fill_rect(px + indent + 4, y_ptr[0], 3, lh * 3, HR_QUOTE_BAR);
         };
         y_ptr[0] = y_ptr[0] + 2;
     };
 
     // HR
     if str_eq(tag, "hr") {
-        y_ptr[0] = y_ptr[0] + hr_line_h() / 2;
+        y_ptr[0] = y_ptr[0] + lh / 2;
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
             gfx_line(px + indent, y_ptr[0], max_x - 8, y_ptr[0], HR_RULE);
         };
-        y_ptr[0] = y_ptr[0] + hr_line_h() / 2;
+        y_ptr[0] = y_ptr[0] + lh / 2;
         x_ptr[0] = px + indent;
         return;
     };
 
     // BR
     if str_eq(tag, "br") {
-        y_ptr[0] = y_ptr[0] + hr_line_h();
+        y_ptr[0] = y_ptr[0] + lh;
         x_ptr[0] = px + indent;
         return;
     };
@@ -726,11 +769,11 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
             ol_counter[0] = ol_counter[0] + 1;
             let num_str: str = "{ol_counter[0]}.";
             if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-                gfx_draw_text_scaled(px + indent - 16, y_ptr[0], num_str, HR_BULLET, canvas_scale(), canvas_scale(), 0);
+                hr_draw(ttf, ttf_px, px + indent - 16, y_ptr[0], num_str, HR_BULLET);
             };
         } else {
             if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-                gfx_draw_text_scaled(px + indent - 12, y_ptr[0], "*", HR_BULLET, canvas_scale(), canvas_scale(), 0);
+                hr_draw(ttf, ttf_px, px + indent - 12, y_ptr[0], "*", HR_BULLET);
             };
         };
     };
@@ -764,7 +807,7 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
 
                 // Start on a new line
                 if x_ptr[0] > px + indent {
-                    y_ptr[0] = y_ptr[0] + hr_line_h();
+                    y_ptr[0] = y_ptr[0] + lh;
                     x_ptr[0] = px + indent;
                 };
 
@@ -805,9 +848,9 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         // Fallback: show alt text placeholder
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text_scaled(x_ptr[0], y_ptr[0], display, HR_DIM, canvas_scale(), canvas_scale(), 0);
+            hr_draw(ttf, ttf_px, x_ptr[0], y_ptr[0], display, HR_DIM);
         };
-        x_ptr[0] = x_ptr[0] + str_len(display) * 8 * canvas_scale() + 8;
+        x_ptr[0] = x_ptr[0] + hr_word_w(ttf, ttf_px, display) + 8;
         return;
     };
 
@@ -825,38 +868,39 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
                        child_is_link, child_href, links,
                        img_cache_idx, img_cache_data,
                        img_cache_w, img_cache_h,
-                       base_url);
+                       base_url,
+                       ttf, ttf_px);
         child = nodes[child].next_sibling;
     };
 
     // Block post-spacing.
     //
     // The semantic here is "move y past the last rendered line + add
-    // element-specific margin". hr_line_h() represents the line height,
-    // so every block must advance at LEAST hr_line_h() after its children
+    // element-specific margin". lh represents the line height,
+    // so every block must advance at LEAST lh after its children
     // render — otherwise a wrapped inline line would stay on screen at
     // the same y as the next block's first line.
     //
-    // <p>, <h1>, <h2>, and the default already add hr_line_h(). <li>,
+    // <p>, <h1>, <h2>, and the default already add lh. <li>,
     // <pre>, <blockquote>, and the <h3+> group were under-advancing
     // (only padding, no line-height), causing wrapped list items to
     // overlap the next item.
     if is_block {
         x_ptr[0] = px + indent;
         if str_eq(tag, "p") {
-            y_ptr[0] = y_ptr[0] + hr_line_h();
+            y_ptr[0] = y_ptr[0] + lh;
         } else if str_eq(tag, "h1") or str_eq(tag, "h2") {
-            y_ptr[0] = y_ptr[0] + hr_line_h();
+            y_ptr[0] = y_ptr[0] + lh;
         } else if str_eq(tag, "h3") or str_eq(tag, "h4") or str_eq(tag, "h5") or str_eq(tag, "h6") {
-            y_ptr[0] = y_ptr[0] + hr_line_h() + hr_line_h() / 2;
+            y_ptr[0] = y_ptr[0] + lh + lh / 2;
         } else if str_eq(tag, "li") {
-            y_ptr[0] = y_ptr[0] + hr_line_h() + 2;
+            y_ptr[0] = y_ptr[0] + lh + 2;
         } else if str_eq(tag, "pre") {
-            y_ptr[0] = y_ptr[0] + hr_line_h() + 4;
+            y_ptr[0] = y_ptr[0] + lh + 4;
         } else if str_eq(tag, "blockquote") {
-            y_ptr[0] = y_ptr[0] + hr_line_h() + hr_line_h() / 2;
+            y_ptr[0] = y_ptr[0] + lh + lh / 2;
         } else {
-            y_ptr[0] = y_ptr[0] + hr_line_h();
+            y_ptr[0] = y_ptr[0] + lh;
         };
     };
 }
@@ -918,7 +962,8 @@ fn! html_render_content(html_source: str,
                         links: [LinkRegion],
                         img_cache_idx: map, img_cache_data: [[i32]],
                         img_cache_w: [i32], img_cache_h: [i32],
-                        base_url: str) -> i32 {
+                        base_url: str,
+                        ttf: handle, ttf_px: f64) -> i32 {
     let mut nodes: [HtmlNode] = [];
     let root: i32 = html_parse(nodes, html_source);
 
@@ -935,7 +980,8 @@ fn! html_render_content(html_source: str,
                    false, "", links,
                    img_cache_idx, img_cache_data,
                    img_cache_w, img_cache_h,
-                   base_url);
+                   base_url,
+                   ttf, ttf_px);
 
     // Return total content height
     y_ptr[0] + scroll_y - panel_y
