@@ -25,7 +25,10 @@ fn! ui_sc() -> i32 { canvas_scale() }
 fn! ui_draw_text_core(x: i32, y: i32, text: str, color: i32,
                       ttf_h: i64, ttf_px: f64) {
     if ttf_h != (0 as i64) {
-        tt_draw_text(x, y, text, ttf_h as handle, ttf_px, color);
+        // See main.osc draw_text: RGB constants lack alpha, OR in 0xFF so
+        // TTF alpha blending produces opaque glyphs.
+        let c: i32 = bor(color, -16777216);
+        tt_draw_text(x, y, text, ttf_h as handle, ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, ui_sc(), ui_sc(), 0);
     };

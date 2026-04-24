@@ -387,8 +387,8 @@ fn! hr_space_w(ttf: handle, ttf_px: f64) -> i32 {
 }
 fn! hr_draw(ttf: handle, ttf_px: f64, x: i32, y: i32, text: str, color: i32) {
     if hr_is_ttf(ttf) {
-        // y is the line-top anchor (matches examples/ttf_view.osc).
-        tt_draw_text(x, y, text, ttf, ttf_px, color);
+        let c: i32 = bor(color, -16777216);
+        tt_draw_text(x, y, text, ttf, ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, canvas_scale(), canvas_scale(), 0);
     };

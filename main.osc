@@ -42,10 +42,13 @@ fn! sp(n: i32) -> i32 { n * sc() }
 // whole UI switches at the same time.
 fn! draw_text(fc: FontCtx, x: i32, y: i32, text: str, color: i32, font: i32) {
     if fc.ttf != (0 as i64) {
-        // tt_draw_text renders glyphs with y as the line's top-ish anchor
-        // (matches examples/ttf_view.osc which passes y directly). The
-        // canvas will clip transparent pixels, so no offset is needed.
-        tt_draw_text(x, y, text, fc.ttf as handle, fc.ttf_px, color);
+        // Our color constants are plain RGB packed as 0x00RRGGBB (alpha=0),
+        // but tt_draw_text alpha-blends glyphs onto the canvas. Without an
+        // explicit alpha byte the text would be fully transparent — invisible.
+        // OR in alpha=0xFF so TTF alpha blending produces opaque glyphs.
+        // (0xFF000000 as i32 = -16777216)
+        let c: i32 = bor(color, -16777216);
+        tt_draw_text(x, y, text, fc.ttf as handle, fc.ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, sc(), sc(), font);
     };
