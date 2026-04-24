@@ -1,5 +1,7 @@
 // ui.osc — Reusable UI widget library for Oscan
 // Provides panel, label, separator, button, checkbox, slider, and textbox widgets.
+// HiDPI: widgets pick up canvas_scale() internally for text and drawn
+// features. Callers should still pass scaled coordinates and sizes.
 
 let UI_BG: i32 = 45 * 65536 + 45 * 256 + 48;
 let UI_BG_HOVER: i32 = 62 * 65536 + 62 * 256 + 66;
@@ -8,6 +10,8 @@ let UI_FG: i32 = 220 * 65536 + 220 * 256 + 220;
 let UI_FG_DIM: i32 = 150 * 65536 + 150 * 256 + 150;
 let UI_BORDER: i32 = 80 * 65536 + 80 * 256 + 85;
 let UI_ACCENT: i32 = 0 * 65536 + 122 * 256 + 204;
+
+fn! ui_sc() -> i32 { canvas_scale() }
 
 fn ui_in_rect(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
     mx >= x and mx < x + w and my >= y and my < y + h
@@ -19,11 +23,11 @@ fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
 }
 
 fn! ui_label(x: i32, y: i32, text: str) {
-    gfx_draw_text(x, y, text, UI_FG, 0);
+    gfx_draw_text_scaled(x, y, text, UI_FG, ui_sc(), ui_sc(), 0);
 }
 
 fn! ui_label_color(x: i32, y: i32, text: str, color: i32) {
-    gfx_draw_text(x, y, text, color, 0);
+    gfx_draw_text_scaled(x, y, text, color, ui_sc(), ui_sc(), 0);
 }
 
 fn! ui_separator(x: i32, y: i32, w: i32) {
@@ -45,10 +49,10 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool
     gfx_fill_rect(x, y, w, h, bg);
     gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
 
-    let text_w: i32 = str_len(label) * 8;
+    let text_w: i32 = str_len(label) * 8 * ui_sc();
     let tx: i32 = x + (w - text_w) / 2;
-    let ty: i32 = y + (h - 8) / 2;
-    gfx_draw_text(tx, ty, label, UI_FG, 0);
+    let ty: i32 = y + (h - 8 * ui_sc()) / 2;
+    gfx_draw_text_scaled(tx, ty, label, UI_FG, ui_sc(), ui_sc(), 0);
 
     clicked
 }
@@ -75,17 +79,18 @@ fn! ui_toggle_button(x: i32, y: i32, w: i32, h: i32, label: str,
                       else { UI_BORDER };
     gfx_rect(x, y, w, h, border);
 
-    let text_w: i32 = str_len(label) * 8;
+    let text_w: i32 = str_len(label) * 8 * ui_sc();
     let tx: i32 = x + (w - text_w) / 2;
-    let ty: i32 = y + (h - 8) / 2;
+    let ty: i32 = y + (h - 8 * ui_sc()) / 2;
     let fg: i32 = if selected { UI_ACCENT } else { UI_FG };
-    gfx_draw_text(tx, ty, label, fg, 0);
+    gfx_draw_text_scaled(tx, ty, label, fg, ui_sc(), ui_sc(), 0);
 
     clicked
 }
 
 fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> bool {
-    let box_size: i32 = 12;
+    let s: i32 = ui_sc();
+    let box_size: i32 = 12 * s;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -97,11 +102,11 @@ fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> boo
     gfx_rect(x, y, box_size, box_size, if hover { UI_ACCENT } else { UI_BORDER });
 
     if checked {
-        gfx_line(x + 2, y + 6, x + 5, y + 9, UI_ACCENT);
-        gfx_line(x + 5, y + 9, x + 10, y + 2, UI_ACCENT);
+        gfx_line(x + 2 * s, y + 6 * s, x + 5 * s, y + 9 * s, UI_ACCENT);
+        gfx_line(x + 5 * s, y + 9 * s, x + 10 * s, y + 2 * s, UI_ACCENT);
     };
 
-    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG, 0);
+    gfx_draw_text_scaled(x + box_size + 6 * s, y + 2 * s, label, UI_FG, s, s, 0);
 
     if clicked { not checked } else { checked }
 }
@@ -121,7 +126,8 @@ fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> boo
 //   22 (Ctrl+V):       paste clipboard at cursor.
 fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], cursor: [i32],
                focused: bool, prev_btn: i32, key: i32) -> bool {
-    let h: i32 = 20;
+    let s: i32 = ui_sc();
+    let h: i32 = 20 * s;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -209,13 +215,13 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], cursor: [i32],
     };
 
     let text: str = str_from_chars(buf);
-    let pad: i32 = 4;
-    let text_y: i32 = y + (h - 8) / 2;
-    gfx_draw_text(x + pad, text_y, text, UI_FG, 0);
+    let pad: i32 = 4 * s;
+    let text_y: i32 = y + (h - 8 * s) / 2;
+    gfx_draw_text_scaled(x + pad, text_y, text, UI_FG, s, s, 0);
 
     if focused {
-        let cx: i32 = x + pad + cursor[0] * 8;
-        gfx_fill_rect(cx, text_y, 1, 8, UI_FG);
+        let cx: i32 = x + pad + cursor[0] * 8 * s;
+        gfx_fill_rect(cx, text_y, s, 8 * s, UI_FG);
     };
 
     if clicked { true }

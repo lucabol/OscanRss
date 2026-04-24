@@ -411,7 +411,7 @@ fn! hr_render_text(text: str, x_ptr: [i32], y_ptr: [i32],
     for wi in 0..len(words) {
         let word: str = words[wi];
         if str_len(word) == 0 { continue; };
-        let word_w: i32 = str_len(word) * 8;
+        let word_w: i32 = str_len(word) * 8 * canvas_scale();
         // Wrap to next line if needed
         if x_ptr[0] + word_w > max_x and x_ptr[0] > px {
             y_ptr[0] = y_ptr[0] + HR_LINE_H;
@@ -419,7 +419,7 @@ fn! hr_render_text(text: str, x_ptr: [i32], y_ptr: [i32],
         };
         // Draw if visible
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text(x_ptr[0], y_ptr[0], word, color, 0);
+            gfx_draw_text_scaled(x_ptr[0], y_ptr[0], word, color, canvas_scale(), canvas_scale(), 0);
             // Underline for links
             if is_link {
                 gfx_line(x_ptr[0], y_ptr[0] + 10, x_ptr[0] + word_w, y_ptr[0] + 10, color);
@@ -444,7 +444,7 @@ fn! hr_render_pre(text: str, x_ptr: [i32], y_ptr: [i32],
     let lines: [str] = str_split(text, "\n");
     for pli in 0..len(lines) {
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text(px + 8, y_ptr[0], lines[pli], color, 0);
+            gfx_draw_text_scaled(px + 8, y_ptr[0], lines[pli], color, canvas_scale(), canvas_scale(), 0);
         };
         y_ptr[0] = y_ptr[0] + HR_LINE_H;
         x_ptr[0] = px;
@@ -726,11 +726,11 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
             ol_counter[0] = ol_counter[0] + 1;
             let num_str: str = "{ol_counter[0]}.";
             if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-                gfx_draw_text(px + indent - 16, y_ptr[0], num_str, HR_BULLET, 0);
+                gfx_draw_text_scaled(px + indent - 16, y_ptr[0], num_str, HR_BULLET, canvas_scale(), canvas_scale(), 0);
             };
         } else {
             if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-                gfx_draw_text(px + indent - 12, y_ptr[0], "*", HR_BULLET, 0);
+                gfx_draw_text_scaled(px + indent - 12, y_ptr[0], "*", HR_BULLET, canvas_scale(), canvas_scale(), 0);
             };
         };
     };
@@ -805,9 +805,9 @@ fn! hr_render_node(nodes: [HtmlNode], idx: i32,
         // Fallback: show alt text placeholder
         let display: str = if str_len(alt) > 0 { "[IMG: {alt}]" } else { "[IMG]" };
         if y_ptr[0] >= min_y and y_ptr[0] < max_y {
-            gfx_draw_text(x_ptr[0], y_ptr[0], display, HR_DIM, 0);
+            gfx_draw_text_scaled(x_ptr[0], y_ptr[0], display, HR_DIM, canvas_scale(), canvas_scale(), 0);
         };
-        x_ptr[0] = x_ptr[0] + str_len(display) * 8 + 8;
+        x_ptr[0] = x_ptr[0] + str_len(display) * 8 * canvas_scale() + 8;
         return;
     };
 

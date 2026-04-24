@@ -13,15 +13,35 @@ use "libs/ui.osc"
 
 // ─── Constants ───────────────────────────────────────────
 
-let WIN_W: i32 = 1100;
-let WIN_H: i32 = 700;
-let TREE_W: i32 = 250;
-let STATUS_H: i32 = 24;
-let CHROME_H: i32 = 30;
-let ROW_H: i32 = 20;
-let POST_SPLIT: i32 = 350;
-let BTN_W: i32 = 80;
-let BTN_H: i32 = 22;
+// HiDPI integer scale factor (1 on Linux / ≤96 DPI; ≥2 on Hi-DPI Windows).
+// canvas_scale() is safe to call even before canvas_open — returns 1.
+fn! sc() -> i32 { canvas_scale() }
+
+// Character cell width/height of the built-in 8x16 bitmap font in the
+// physical pixel space we actually draw into.
+fn! charw() -> i32 { 8 * sc() }
+fn! charh() -> i32 { 16 * sc() }
+
+// Layout dimensions are authored in logical pixels; functions return the
+// physical pixel count so every call site is automatically DPI-aware.
+fn! WIN_W() -> i32 { 1100 * sc() }
+fn! WIN_H() -> i32 { 700 * sc() }
+fn! TREE_W() -> i32 { 250 * sc() }
+fn! STATUS_H() -> i32 { 24 * sc() }
+fn! CHROME_H() -> i32 { 30 * sc() }
+fn! ROW_H() -> i32 { 20 * sc() }
+fn! POST_SPLIT() -> i32 { 350 * sc() }
+fn! BTN_W() -> i32 { 80 * sc() }
+fn! BTN_H() -> i32 { 22 * sc() }
+
+// Scaled small offset helper: `sp(n)` = n logical pixels in physical space.
+fn! sp(n: i32) -> i32 { n * sc() }
+
+// Draw bitmap text at the built-in 8x16 font scaled by the current DPI.
+// Wraps gfx_draw_text_scaled so call sites don't have to repeat (sc, sc).
+fn! draw_text(x: i32, y: i32, text: str, color: i32, font: i32) {
+    gfx_draw_text_scaled(x, y, text, color, sc(), sc(), font);
+}
 
 // Colors
 let BG_COLOR: i32 = 30 * 65536 + 30 * 256 + 34;
@@ -382,12 +402,12 @@ fn! render_loading(w: i32, h: i32, done: i32, total: i32, label: str) {
     canvas_clear(BG_COLOR);
 
     let title: str = "OscanRss - Loading feeds";
-    let title_x: i32 = (w - str_len(title) * 8) / 2;
-    gfx_draw_text(title_x, h / 2 - 60, title, TITLE_COLOR, 0);
+    let title_x: i32 = (w - str_len(title) * charw()) / 2;
+    draw_text(title_x, h / 2 - 60, title, TITLE_COLOR, 0);
 
     let msg: str = "{label}  ({done}/{total})";
-    let msg_x: i32 = (w - str_len(msg) * 8) / 2;
-    gfx_draw_text(msg_x, h / 2 - 30, msg, TEXT_COLOR, 0);
+    let msg_x: i32 = (w - str_len(msg) * charw()) / 2;
+    draw_text(msg_x, h / 2 - 30, msg, TEXT_COLOR, 0);
 
     // Progress bar
     let bar_w: i32 = if w < 520 { w - 80 } else { 480 };
@@ -487,18 +507,18 @@ fn! refresh_all_feeds(feeds: [Feed], posts: [Post], read_guids: map,
 // ─── Rendering ───────────────────────────────────────────
 
 fn! render_chrome(w: i32) {
-    gfx_fill_rect(0, 0, w, CHROME_H, STATUS_BG);
-    gfx_draw_text(10, 8, "OscanRSS - Feed Reader", TITLE_COLOR, 0);
-    gfx_line(0, CHROME_H, w, CHROME_H, BORDER_COLOR);
+    gfx_fill_rect(0, 0, w, CHROME_H(), STATUS_BG);
+    draw_text(10, 8, "OscanRSS - Feed Reader", TITLE_COLOR, 0);
+    gfx_line(0, CHROME_H(), w, CHROME_H(), BORDER_COLOR);
 }
 
 fn! render_status(w: i32, h: i32, total_unread: i32, status_msg: str) {
-    let sy: i32 = h - STATUS_H;
-    gfx_fill_rect(0, sy, w, STATUS_H, STATUS_BG);
+    let sy: i32 = h - STATUS_H();
+    gfx_fill_rect(0, sy, w, STATUS_H(), STATUS_BG);
     gfx_line(0, sy, w, sy, BORDER_COLOR);
-    gfx_draw_text(10, sy + 6, "{total_unread} unread", TEXT_COLOR, 0);
+    draw_text(10, sy + 6, "{total_unread} unread", TEXT_COLOR, 0);
     if str_len(status_msg) > 0 {
-        gfx_draw_text(200, sy + 6, status_msg, DIM_COLOR, 0);
+        draw_text(200, sy + 6, status_msg, DIM_COLOR, 0);
     };
 }
 
@@ -507,7 +527,7 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                       tree_scroll: i32, panel_h: i32, prev_btn: i32,
                       tree_w: i32, failed_feeds: map) -> i32 {
     let px: i32 = 0;
-    let py: i32 = CHROME_H;
+    let py: i32 = CHROME_H();
     gfx_fill_rect(px, py, tree_w, panel_h, PANEL_BG);
     gfx_line(tree_w, py, tree_w, py + panel_h, BORDER_COLOR);
 
@@ -517,36 +537,36 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
     for gi in 0..len(groups) {
         let g: FeedGroup = groups[gi];
         let gy: i32 = draw_y;
-        if gy >= py and gy < py + panel_h - ROW_H {
+        if gy >= py and gy < py + panel_h - ROW_H() {
             // Highlight if selected
             if g.id == sel_group and sel_feed < 0 {
-                gfx_fill_rect(px, gy, tree_w - 1, ROW_H, SELECT_BG);
+                gfx_fill_rect(px, gy, tree_w - 1, ROW_H(), SELECT_BG);
             };
 
             // Expand/collapse arrow
             let arrow: str = if g.expanded { "v" } else { ">" };
-            gfx_draw_text(px + 6, gy + 4, arrow, DIM_COLOR, 0);
+            draw_text(px + 6, gy + 4, arrow, DIM_COLOR, 0);
 
             // Group name
             let gname: str = truncate_str(g.name, 20);
-            gfx_draw_text(px + 20, gy + 4, gname, GROUP_COLOR, 0);
+            draw_text(px + 20, gy + 4, gname, GROUP_COLOR, 0);
 
             // Unread badge
             let gunread: i32 = count_group_unread(posts, feeds, g.id, read_guids);
             if gunread > 0 {
                 let badge: str = "({gunread})";
-                gfx_draw_text(px + 22 + str_len(gname) * 8, gy + 4, badge, BADGE_COLOR, 0);
+                draw_text(px + 22 + str_len(gname) * charw(), gy + 4, badge, BADGE_COLOR, 0);
             };
 
             // Click detection for group
             let mx: i32 = canvas_mouse_x();
             let my: i32 = canvas_mouse_y();
             let mbtn: i32 = canvas_mouse_btn();
-            if ui_in_rect(mx, my, px, gy, tree_w, ROW_H) and band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
+            if ui_in_rect(mx, my, px, gy, tree_w, ROW_H()) and band(mbtn, 1) == 1 and band(prev_btn, 1) == 0 {
                 clicked_type = 10000 + gi;
             };
         };
-        draw_y += ROW_H;
+        draw_y += ROW_H();
 
         // Draw feeds under this group if expanded.
         // Three passes: feeds with posts, feeds with no posts (but no
@@ -561,34 +581,34 @@ fn! render_tree_panel(groups: [FeedGroup], feeds: [Feed], posts: [Post],
                         let bucket: i32 = if has_err { 2 } else if n_posts == 0 { 1 } else { 0 };
                         if bucket == pass {
                             let fy: i32 = draw_y;
-                            if fy >= py and fy < py + panel_h - ROW_H {
+                            if fy >= py and fy < py + panel_h - ROW_H() {
                                 if feeds[fi3].id == sel_feed {
-                                    gfx_fill_rect(px, fy, tree_w - 1, ROW_H, SELECT_BG);
+                                    gfx_fill_rect(px, fy, tree_w - 1, ROW_H(), SELECT_BG);
                                 };
 
                                 let marker: str = if has_err { "!" } else if n_posts == 0 { "-" } else { "*" };
                                 let marker_color: i32 = if has_err { ERROR_COLOR } else { DIM_COLOR };
-                                gfx_draw_text(px + 24, fy + 4, marker, marker_color, 0);
+                                draw_text(px + 24, fy + 4, marker, marker_color, 0);
                                 let fname: str = truncate_str(feeds[fi3].name, 18);
                                 let fname_color: i32 = if has_err { ERROR_COLOR } else if n_posts == 0 { DIM_COLOR } else { TEXT_COLOR };
-                                gfx_draw_text(px + 36, fy + 4, fname, fname_color, 0);
+                                draw_text(px + 36, fy + 4, fname, fname_color, 0);
 
                                 if not has_err {
                                     let funread: i32 = count_unread(posts, feeds[fi3].id, read_guids);
                                     if funread > 0 {
                                         let fbadge: str = "({funread})";
-                                        gfx_draw_text(px + 38 + str_len(fname) * 8, fy + 4, fbadge, BADGE_COLOR, 0);
+                                        draw_text(px + 38 + str_len(fname) * charw(), fy + 4, fbadge, BADGE_COLOR, 0);
                                     };
                                 };
 
                                 let mx2: i32 = canvas_mouse_x();
                                 let my2: i32 = canvas_mouse_y();
                                 let mbtn2: i32 = canvas_mouse_btn();
-                                if ui_in_rect(mx2, my2, px, fy, tree_w, ROW_H) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
+                                if ui_in_rect(mx2, my2, px, fy, tree_w, ROW_H()) and band(mbtn2, 1) == 1 and band(prev_btn, 1) == 0 {
                                     clicked_type = 20000 + fi3;
                                 };
                             };
-                            draw_y += ROW_H;
+                            draw_y += ROW_H();
                         };
                     };
                 };
@@ -605,15 +625,15 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
                      list_scroll: i32, panel_x: i32, panel_w: i32,
                      panel_h: i32, prev_btn: i32, list_h: i32,
                      status_msg: str, feeds: [Feed], failed_feeds: map) -> i32 {
-    let py: i32 = CHROME_H;
+    let py: i32 = CHROME_H();
     let max_y: i32 = py + list_h;
     gfx_fill_rect(panel_x, py, panel_w, list_h, BG_COLOR);
 
     // Header
-    gfx_draw_text(panel_x + 8, py + 6, "Posts", TITLE_COLOR, 0);
-    gfx_line(panel_x, py + ROW_H, panel_x + panel_w, py + ROW_H, BORDER_COLOR);
+    draw_text(panel_x + 8, py + 6, "Posts", TITLE_COLOR, 0);
+    gfx_line(panel_x, py + ROW_H(), panel_x + panel_w, py + ROW_H(), BORDER_COLOR);
 
-    let mut draw_y: i32 = py + ROW_H + 4 - list_scroll;
+    let mut draw_y: i32 = py + ROW_H() + 4 - list_scroll;
     let mut clicked_post: i32 = -1;
     let mut visible_idx: i32 = 0;
 
@@ -634,38 +654,38 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
         };
 
         if pi_match and not pi_filtered {
-            if draw_y >= py + ROW_H and draw_y < max_y - ROW_H {
+            if draw_y >= py + ROW_H() and draw_y < max_y - ROW_H() {
                 // Selection highlight
                 if pi == sel_post {
-                    gfx_fill_rect(panel_x, draw_y - 2, panel_w, ROW_H + 4, SELECT_BG);
+                    gfx_fill_rect(panel_x, draw_y - 2, panel_w, ROW_H() + 4, SELECT_BG);
                 };
 
                 // Read/unread indicator
                 let indicator: str = if is_read { "o" } else { "*" };
                 let ind_color: i32 = if is_read { READ_COLOR } else { UNREAD_COLOR };
-                gfx_draw_text(panel_x + 8, draw_y + 2, indicator, ind_color, 0);
+                draw_text(panel_x + 8, draw_y + 2, indicator, ind_color, 0);
 
                 // Title
                 let max_title: i32 = (panel_w - 100) / 8;
                 let ptitle: str = truncate_str(posts[pi].title, max_title);
                 let title_color: i32 = if is_read { DIM_COLOR } else { TEXT_COLOR };
-                gfx_draw_text(panel_x + 22, draw_y + 2, ptitle, title_color, 0);
+                draw_text(panel_x + 22, draw_y + 2, ptitle, title_color, 0);
 
                 // Date (right-aligned, truncated)
                 let pdate: str = truncate_str(posts[pi].pub_date, 16);
-                let date_x: i32 = panel_x + panel_w - str_len(pdate) * 8 - 8;
-                gfx_draw_text(date_x, draw_y + 2, pdate, DIM_COLOR, 0);
+                let date_x: i32 = panel_x + panel_w - str_len(pdate) * charw() - 8;
+                draw_text(date_x, draw_y + 2, pdate, DIM_COLOR, 0);
 
                 // Click detection
                 let mx3: i32 = canvas_mouse_x();
                 let my3: i32 = canvas_mouse_y();
                 let mbtn3: i32 = canvas_mouse_btn();
-                if ui_in_rect(mx3, my3, panel_x, draw_y - 2, panel_w, ROW_H + 4) and band(mbtn3, 1) == 1 and band(prev_btn, 1) == 0 {
+                if ui_in_rect(mx3, my3, panel_x, draw_y - 2, panel_w, ROW_H() + 4) and band(mbtn3, 1) == 1 and band(prev_btn, 1) == 0 {
                     clicked_post = pi;
                 };
             };
 
-            draw_y += ROW_H + 2;
+            draw_y += ROW_H() + 2;
             visible_idx += 1;
         };
     };
@@ -693,18 +713,18 @@ fn! render_post_list(posts: [Post], sel_feed: i32, sel_post: i32,
 
         if str_len(feed_err) > 0 {
             let line1: str = truncate_str(feed_err, max_chars);
-            gfx_draw_text(panel_x + 12, py + ROW_H + 12, line1, ERROR_COLOR, 0);
+            draw_text(panel_x + 12, py + ROW_H() + 12, line1, ERROR_COLOR, 0);
             if str_len(feed_url) > 0 {
                 let line2: str = truncate_str("URL: {feed_url}", max_chars);
-                gfx_draw_text(panel_x + 12, py + ROW_H + 28, line2, DIM_COLOR, 0);
+                draw_text(panel_x + 12, py + ROW_H() + 28, line2, DIM_COLOR, 0);
             };
         } else {
             let is_err: bool = str_starts_with(status_msg, "Failed:") or str_starts_with(status_msg, "No items:");
             if is_err {
                 let msg_line: str = truncate_str(status_msg, max_chars);
-                gfx_draw_text(panel_x + 12, py + ROW_H + 12, msg_line, UNREAD_COLOR, 0);
+                draw_text(panel_x + 12, py + ROW_H() + 12, msg_line, UNREAD_COLOR, 0);
             } else {
-                gfx_draw_text(panel_x + 12, py + ROW_H + 12, "No posts in the last month.", DIM_COLOR, 0);
+                draw_text(panel_x + 12, py + ROW_H() + 12, "No posts in the last month.", DIM_COLOR, 0);
             };
         };
     };
@@ -724,7 +744,7 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
     while len(content_links) > 0 { pop(content_links); };
 
     if sel_post < 0 or sel_post >= len(posts) {
-        gfx_draw_text(panel_x + 20, content_y + 20, "Select a post to read", DIM_COLOR, 0);
+        draw_text(panel_x + 20, content_y + 20, "Select a post to read", DIM_COLOR, 0);
         return;
     };
 
@@ -736,24 +756,24 @@ fn! render_post_content(posts: [Post], sel_post: i32, panel_x: i32,
 
     // Title
     if cy >= content_y and cy < content_y + content_h {
-        gfx_draw_text(panel_x + 8, cy, post.title, TITLE_COLOR, 0);
+        draw_text(panel_x + 8, cy, post.title, TITLE_COLOR, 0);
     };
     cy += 18;
 
     // Date
     if cy >= content_y and cy < content_y + content_h {
-        gfx_draw_text(panel_x + 8, cy, post.pub_date, DIM_COLOR, 0);
+        draw_text(panel_x + 8, cy, post.pub_date, DIM_COLOR, 0);
     };
     cy += 14;
 
     // Link (clickable — register as link region)
     let link_disp: str = truncate_str(post.link, 60);
     if cy >= content_y and cy < content_y + content_h {
-        gfx_draw_text(panel_x + 8, cy, link_disp, LINK_COLOR, 0);
-        gfx_line(panel_x + 8, cy + 10, panel_x + 8 + str_len(link_disp) * 8, cy + 10, LINK_COLOR);
+        draw_text(panel_x + 8, cy, link_disp, LINK_COLOR, 0);
+        gfx_line(panel_x + 8, cy + 10, panel_x + 8 + str_len(link_disp) * charw(), cy + 10, LINK_COLOR);
         let header_link: LinkRegion = LinkRegion {
             x: panel_x + 8, y: cy,
-            w: str_len(link_disp) * 8, h: 14,
+            w: str_len(link_disp) * charw(), h: 14,
             href: post.link,
         };
         push(content_links, header_link);
@@ -811,49 +831,49 @@ fn! render_dialog(mode: AppMode, buf1: [i32], buf2: [i32],
         AppMode::ImportOpml => { "Import OPML" },
         AppMode::Normal => { "Dialog" },
     };
-    gfx_draw_text(dx + 10, dy + 8, title, TITLE_COLOR, 0);
+    draw_text(dx + 10, dy + 8, title, TITLE_COLOR, 0);
     gfx_line(dx, dy + 24, dx + dw, dy + 24, BORDER_COLOR);
 
     let mut result: i32 = 0;
 
     match mode {
         AppMode::AddGroup => {
-            gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
             let _f1: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
         },
         AppMode::EditGroup => {
-            gfx_draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 34, "Group Name:", TEXT_COLOR, 0);
             let _f2: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
         },
         AppMode::AddFeed => {
-            gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
             let _f3: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, focused_field == 0, prev_btn, key);
-            gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
             let _f4: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, cur2, focused_field == 1, prev_btn, key);
         },
         AppMode::EditFeed => {
-            gfx_draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 34, "Feed Name:", TEXT_COLOR, 0);
             let _f5: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, focused_field == 0, prev_btn, key);
-            gfx_draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 78, "Feed URL:", TEXT_COLOR, 0);
             let _f6: bool = ui_textbox(dx + 10, dy + 94, dw - 20, buf2, cur2, focused_field == 1, prev_btn, key);
         },
         AppMode::Confirm => {
-            gfx_draw_text(dx + 10, dy + 50, "Are you sure you want to delete?", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 50, "Are you sure you want to delete?", TEXT_COLOR, 0);
         },
         AppMode::ImportOpml => {
-            gfx_draw_text(dx + 10, dy + 34, "OPML file path:", TEXT_COLOR, 0);
+            draw_text(dx + 10, dy + 34, "OPML file path:", TEXT_COLOR, 0);
             let _fi: bool = ui_textbox(dx + 10, dy + 50, dw - 20, buf1, cur1, true, prev_btn, key);
-            gfx_draw_text(dx + 10, dy + 78, "Groups & feeds are appended; duplicates skipped.", DIM_COLOR, 0);
+            draw_text(dx + 10, dy + 78, "Groups & feeds are appended; duplicates skipped.", DIM_COLOR, 0);
         },
         _ => {},
     };
 
     // OK / Cancel buttons
     let btn_y: i32 = dy + dh - 34;
-    if ui_button(dx + dw - 180, btn_y, 80, BTN_H, "OK", prev_btn) {
+    if ui_button(dx + dw - 180, btn_y, 80, BTN_H(), "OK", prev_btn) {
         result = 1;
     };
-    if ui_button(dx + dw - 90, btn_y, 80, BTN_H, "Cancel", prev_btn) {
+    if ui_button(dx + dw - 90, btn_y, 80, BTN_H(), "Cancel", prev_btn) {
         result = 2;
     };
 
@@ -872,29 +892,29 @@ fn! render_help(w: i32, h: i32) {
 
     gfx_fill_rect(dx, dy, dw, dh, DIALOG_BG);
     gfx_rect(dx, dy, dw, dh, UI_ACCENT);
-    gfx_draw_text(dx + 10, dy + 8, "Keyboard Shortcuts", TITLE_COLOR, 0);
+    draw_text(dx + 10, dy + 8, "Keyboard Shortcuts", TITLE_COLOR, 0);
     gfx_line(dx, dy + 24, dx + dw, dy + 24, BORDER_COLOR);
 
     let mut hy: i32 = dy + 32;
     let hx: i32 = dx + 10;
     let hx2: i32 = dx + 100;
-    gfx_draw_text(hx, hy, "j / k", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Navigate up/down", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "Enter", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Select / expand", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "Tab", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Switch panel", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "a", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Add group/feed", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "e", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Edit selected", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "d", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Delete selected", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "r", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh feed", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "R", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Refresh all", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "u", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Cycle filter (session/unread/all)", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "m", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle read/unread", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "M", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Mark all read", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "Space", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Page article down (on post list)", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "Bksp", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Page article up (on post list)", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "?", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Toggle help", TEXT_COLOR, 0); hy += 16;
-    gfx_draw_text(hx, hy, "q", UNREAD_COLOR, 0); gfx_draw_text(hx2, hy, "Quit", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "j / k", UNREAD_COLOR, 0); draw_text(hx2, hy, "Navigate up/down", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "Enter", UNREAD_COLOR, 0); draw_text(hx2, hy, "Select / expand", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "Tab", UNREAD_COLOR, 0); draw_text(hx2, hy, "Switch panel", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "a", UNREAD_COLOR, 0); draw_text(hx2, hy, "Add group/feed", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "e", UNREAD_COLOR, 0); draw_text(hx2, hy, "Edit selected", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "d", UNREAD_COLOR, 0); draw_text(hx2, hy, "Delete selected", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "r", UNREAD_COLOR, 0); draw_text(hx2, hy, "Refresh feed", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "R", UNREAD_COLOR, 0); draw_text(hx2, hy, "Refresh all", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "u", UNREAD_COLOR, 0); draw_text(hx2, hy, "Cycle filter (session/unread/all)", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "m", UNREAD_COLOR, 0); draw_text(hx2, hy, "Toggle read/unread", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "M", UNREAD_COLOR, 0); draw_text(hx2, hy, "Mark all read", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "Space", UNREAD_COLOR, 0); draw_text(hx2, hy, "Page article down (on post list)", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "Bksp", UNREAD_COLOR, 0); draw_text(hx2, hy, "Page article up (on post list)", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "?", UNREAD_COLOR, 0); draw_text(hx2, hy, "Toggle help", TEXT_COLOR, 0); hy += 16;
+    draw_text(hx, hy, "q", UNREAD_COLOR, 0); draw_text(hx2, hy, "Quit", TEXT_COLOR, 0); hy += 16;
 
-    gfx_draw_text(dx + 10, dy + dh - 20, "Press ? or Esc to close", DIM_COLOR, 0);
+    draw_text(dx + 10, dy + dh - 20, "Press ? or Esc to close", DIM_COLOR, 0);
 }
 
 // ─── Main ────────────────────────────────────────────────
@@ -944,8 +964,8 @@ fn! main() {
     let mut img_cache_h: [i32] = [];
 
     // Resizable pane layout
-    let mut tree_w: i32 = TREE_W;
-    let mut list_h: i32 = POST_SPLIT;
+    let mut tree_w: i32 = TREE_W();
+    let mut list_h: i32 = POST_SPLIT();
     let mut drag_v: bool = false; // dragging vertical splitter (tree_w)
     let mut drag_h: bool = false; // dragging horizontal splitter (list_h)
 
@@ -955,7 +975,7 @@ fn! main() {
     };
 
     // Open canvas
-    let open_result: Result<str, str> = canvas_open(WIN_W, WIN_H, "OscanRss");
+    let open_result: Result<str, str> = canvas_open(WIN_W(), WIN_H(), "OscanRss");
     match open_result {
         Result::Ok(_s) => {},
         Result::Err(e) => { println("Failed to open window: {e}"); exit(1); },
@@ -986,9 +1006,9 @@ fn! main() {
         let h: i32 = canvas_height();
         let wheel: i32 = canvas_wheel();
         let panel_w: i32 = w - tree_w;
-        let panel_h: i32 = h - CHROME_H - STATUS_H;
-        let content_y: i32 = CHROME_H + list_h;
-        let content_h: i32 = h - CHROME_H - list_h - STATUS_H;
+        let panel_h: i32 = h - CHROME_H() - STATUS_H();
+        let content_y: i32 = CHROME_H() + list_h;
+        let content_h: i32 = h - CHROME_H() - list_h - STATUS_H();
 
         // ─── Input handling (outside rendering) ──────────
 
@@ -1250,9 +1270,9 @@ fn! main() {
             // Scroll
             if wheel != 0 {
                 if focus_panel == 0 {
-                    tree_scroll = max_i32(0, tree_scroll - wheel * ROW_H);
+                    tree_scroll = max_i32(0, tree_scroll - wheel * ROW_H());
                 } else if focus_panel == 1 {
-                    list_scroll = max_i32(0, list_scroll - wheel * ROW_H);
+                    list_scroll = max_i32(0, list_scroll - wheel * ROW_H());
                 } else {
                     content_scroll = max_i32(0, content_scroll - wheel * 14);
                 };
@@ -1274,12 +1294,12 @@ fn! main() {
 
         // Tree panel buttons
         let btn_x: i32 = 4;
-        let btn_base_y: i32 = h - STATUS_H - BTN_H - 6;
-        let add_group_clicked: bool = ui_button(btn_x, btn_base_y, 58, BTN_H, "+Group", prev_btn);
-        let add_feed_clicked: bool = ui_button(btn_x + 62, btn_base_y, 56, BTN_H, "+Feed", prev_btn);
-        let edit_clicked: bool = ui_button(btn_x + 122, btn_base_y, 50, BTN_H, "Edit", prev_btn);
-        let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H, "Del", prev_btn);
-        let import_clicked: bool = ui_button(btn_x + 230, btn_base_y, 60, BTN_H, "Import", prev_btn);
+        let btn_base_y: i32 = h - STATUS_H() - BTN_H() - 6;
+        let add_group_clicked: bool = ui_button(btn_x, btn_base_y, 58, BTN_H(), "+Group", prev_btn);
+        let add_feed_clicked: bool = ui_button(btn_x + 62, btn_base_y, 56, BTN_H(), "+Feed", prev_btn);
+        let edit_clicked: bool = ui_button(btn_x + 122, btn_base_y, 50, BTN_H(), "Edit", prev_btn);
+        let del_clicked: bool = ui_button(btn_x + 176, btn_base_y, 50, BTN_H(), "Del", prev_btn);
+        let import_clicked: bool = ui_button(btn_x + 230, btn_base_y, 60, BTN_H(), "Import", prev_btn);
 
         // View-filter toggle buttons: "All" and "Unread". When both
         // are off (pressed state cleared), the post list shows the
@@ -1287,8 +1307,8 @@ fn! main() {
         // read this session rendered dimmed.
         let all_selected: bool = filter_mode == 1;
         let unread_selected: bool = filter_mode == 2;
-        let all_clicked: bool = ui_toggle_button(w - 160, 4, 70, BTN_H, "All", all_selected, prev_btn);
-        let unread_clicked: bool = ui_toggle_button(w - 84, 4, 76, BTN_H, "Unread", unread_selected, prev_btn);
+        let all_clicked: bool = ui_toggle_button(w - 160, 4, 70, BTN_H(), "All", all_selected, prev_btn);
+        let unread_clicked: bool = ui_toggle_button(w - 84, 4, 76, BTN_H(), "Unread", unread_selected, prev_btn);
 
         // Handle button clicks (in Normal mode)
         if is_normal and not show_help {
@@ -1354,10 +1374,10 @@ fn! main() {
             let fmy: i32 = canvas_mouse_y();
             let fbtn: i32 = canvas_mouse_btn();
             if band(fbtn, 1) == 1 and band(prev_btn, 1) == 0 and is_normal {
-                if fmy >= CHROME_H and fmy < h - STATUS_H {
+                if fmy >= CHROME_H() and fmy < h - STATUS_H() {
                     if fmx < tree_w {
                         focus_panel = 0;
-                    } else if fmy < CHROME_H + list_h {
+                    } else if fmy < CHROME_H() + list_h {
                         focus_panel = 1;
                     } else {
                         focus_panel = 2;
@@ -1369,7 +1389,7 @@ fn! main() {
         // Tree panel
         let tree_click: i32 = render_tree_panel(groups, feeds, posts, read_guids,
                                                  sel_group, sel_feed, tree_scroll,
-                                                 panel_h - BTN_H - 10, prev_btn,
+                                                 panel_h - BTN_H() - 10, prev_btn,
                                                  tree_w, failed_feeds);
         if tree_click >= 20000 and is_normal {
             // Clicked a feed — select and auto-refresh so newly-arrived
@@ -1411,8 +1431,8 @@ fn! main() {
                 do_save_read(posts, read_guids);
             };
         } else {
-            gfx_fill_rect(tree_w, CHROME_H, panel_w, panel_h, BG_COLOR);
-            gfx_draw_text(tree_w + 20, CHROME_H + 40, "Select a feed to view posts", DIM_COLOR, 0);
+            gfx_fill_rect(tree_w, CHROME_H(), panel_w, panel_h, BG_COLOR);
+            draw_text(tree_w + 20, CHROME_H() + 40, "Select a feed to view posts", DIM_COLOR, 0);
         };
 
         // Post content
@@ -1643,7 +1663,7 @@ fn! main() {
 
         // ─── Splitter handles (drag to resize panes) ─────
         // Vertical splitter at x = tree_w: drag to resize left tree panel
-        // Horizontal splitter at y = CHROME_H + list_h: drag to resize post list (only when a feed is selected)
+        // Horizontal splitter at y = CHROME_H() + list_h: drag to resize post list (only when a feed is selected)
         {
             let smx: i32 = canvas_mouse_x();
             let smy: i32 = canvas_mouse_y();
@@ -1653,13 +1673,13 @@ fn! main() {
             let held: bool = band(sbtn, 1) == 1;
 
             let v_x: i32 = tree_w;
-            let v_y0: i32 = CHROME_H;
-            let v_y1: i32 = h - STATUS_H;
+            let v_y0: i32 = CHROME_H();
+            let v_y1: i32 = h - STATUS_H();
             let v_hover: bool = smx >= v_x - 3 and smx <= v_x + 3 and smy >= v_y0 and smy < v_y1;
 
             let h_x0: i32 = tree_w;
             let h_x1: i32 = w;
-            let h_y: i32 = CHROME_H + list_h;
+            let h_y: i32 = CHROME_H() + list_h;
             let h_hover: bool = sel_feed >= 0 and smy >= h_y - 3 and smy <= h_y + 3 and smx >= h_x0 and smx < h_x1;
 
             if pressed and is_normal {
@@ -1677,9 +1697,9 @@ fn! main() {
                 if tree_w > w - 250 { tree_w = w - 250; };
             };
             if drag_h and held {
-                list_h = smy - CHROME_H;
+                list_h = smy - CHROME_H();
                 let min_list: i32 = 80;
-                let max_list: i32 = h - CHROME_H - STATUS_H - 120;
+                let max_list: i32 = h - CHROME_H() - STATUS_H() - 120;
                 if list_h < min_list { list_h = min_list; };
                 if list_h > max_list { list_h = max_list; };
             };
