@@ -2,7 +2,9 @@
 
 **A Feedly-style RSS feed reader written in [Oscan](https://github.com/lucabol/Oscan)**
 
-![OscanRss screenshot](docs/screenshot.png)
+[![OscanRss screenshot](docs/screenshot.png)](docs/screenshot.png)
+
+*Three-panel UI: group/feed tree, post list, and HTML content viewer.*
 
 OscanRss is a desktop RSS reader with a three-panel GUI: a treeview of groups and feeds, a post list, and a content viewer with inline HTML rendering. It supports RSS and Atom feeds over HTTP and HTTPS, parallel fetching, OPML import, per-session read tracking, and persistent storage.
 
@@ -24,13 +26,19 @@ OscanRss is a desktop RSS reader with a three-panel GUI: a treeview of groups an
 - **Retro CRT icon** — Phosphor-green "R" window/taskbar icon
 - **Cross-platform** — Windows, Linux, macOS (release binaries for all three)
 
-## Prerequisites
-
-- **[Oscan compiler](https://github.com/lucabol/Oscan)** — required
-- **`curl`** — used for parallel feed fetching (ships with Windows 10+, macOS, most Linux distros)
-- **PowerShell** — for the build script
-
 ## Quick Start
+
+### Run a prebuilt binary (easiest)
+
+Download the binary for your OS from the [latest GitHub release](https://github.com/lucabol/OscanRss/releases) and run it. Only requirement: **`curl`** on `PATH` (ships with Windows 10+, macOS, and most Linux distros).
+
+### Build from source
+
+Requirements:
+
+- **[Oscan compiler](https://github.com/lucabol/Oscan)** on `PATH`
+- **PowerShell** for the build script — on Linux/macOS install [PowerShell Core](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh`)
+- **`curl`**
 
 ```powershell
 # Build and run
@@ -43,9 +51,9 @@ OscanRss is a desktop RSS reader with a three-panel GUI: a treeview of groups an
 .\build.ps1 -V
 ```
 
-Pre-built binaries for Windows, Linux, and macOS are attached to each [GitHub release](https://github.com/lucabol/OscanRss/releases).
-
 ## Keyboard Shortcuts
+
+**Navigation**
 
 | Key | Action |
 |-----|--------|
@@ -53,14 +61,29 @@ Pre-built binaries for Windows, Linux, and macOS are attached to each [GitHub re
 | `n` / `p` | Next/previous post |
 | `Enter` | Select / expand group |
 | `Tab` | Switch panel focus |
+
+**Feed management**
+
+| Key | Action |
+|-----|--------|
 | `a` | Add group or feed |
 | `e` | Edit selected item |
 | `d` | Delete selected item |
 | `r` | Refresh selected feed |
 | `R` | Refresh all feeds |
+
+**Reading**
+
+| Key | Action |
+|-----|--------|
 | `u` | Cycle post filter (session → unread → all) |
 | `m` | Toggle read/unread |
 | `M` | Mark all posts in feed as read |
+
+**Misc**
+
+| Key | Action |
+|-----|--------|
 | `?` | Toggle help overlay |
 | `q` | Quit |
 
@@ -87,7 +110,12 @@ main.osc             Entry point, UI, event loop
 
 ## Data Storage
 
-Configuration and state are stored as flat files in `%APPDATA%` (Windows) or `$HOME` (Linux/macOS):
+Configuration and state are stored as flat files:
+
+- **Windows:** `%APPDATA%\oscanrss_*.txt`
+- **Linux/macOS:** `$HOME/oscanrss_*.txt`
+
+Files:
 
 - `oscanrss_groups.txt` — Group definitions (pipe-delimited)
 - `oscanrss_feeds.txt` — Feed subscriptions (pipe-delimited)
@@ -105,4 +133,4 @@ Configuration and state are stored as flat files in `%APPDATA%` (Windows) or `$H
 
 ## License
 
-MIT
+[MIT](LICENSE)
