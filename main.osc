@@ -42,13 +42,14 @@ fn! sp(n: i32) -> i32 { n * sc() }
 // whole UI switches at the same time.
 fn! draw_text(fc: FontCtx, x: i32, y: i32, text: str, color: i32, font: i32) {
     if fc.ttf != (0 as i64) {
-        // Our color constants are plain RGB packed as 0x00RRGGBB (alpha=0),
-        // but tt_draw_text alpha-blends glyphs onto the canvas. Without an
-        // explicit alpha byte the text would be fully transparent — invisible.
-        // OR in alpha=0xFF so TTF alpha blending produces opaque glyphs.
-        // (0xFF000000 as i32 = -16777216)
+        // tt_draw_text treats y as the baseline. Callers pass y as the
+        // row-top anchor (same as gfx_draw_text_scaled), so shift down by
+        // the ascent (~0.8*px) to place glyphs inside the row.
+        // Also OR in alpha=0xFF: color constants are 0x00RRGGBB which
+        // gfx_* treats as opaque but tt_draw_text would render transparent.
         let c: i32 = bor(color, -16777216);
-        tt_draw_text(x, y, text, fc.ttf as handle, fc.ttf_px, c);
+        let shift: i32 = (fc.ttf_px * 0.8) as i32;
+        tt_draw_text(x, y + shift, text, fc.ttf as handle, fc.ttf_px, c);
     } else {
         gfx_draw_text_scaled(x, y, text, color, sc(), sc(), font);
     };
@@ -1047,7 +1048,7 @@ fn! main() {
     // `ttf_enabled` and the current canvas scale.
     let mut fc: FontCtx = FontCtx {
         ttf: 0 as i64,
-        ttf_px: 14.0 * (canvas_scale() as f64),
+        ttf_px: 20.0 * (canvas_scale() as f64),
     };
 
     // On startup, try to fetch every feed so errored feeds can be
@@ -1080,7 +1081,7 @@ fn! main() {
         // dialogs.
         fc = FontCtx {
             ttf: if ttf_enabled { ttf_font as i64 } else { 0 as i64 },
-            ttf_px: 14.0 * (canvas_scale() as f64),
+            ttf_px: 20.0 * (canvas_scale() as f64),
         };
 
         // ─── Input handling (outside rendering) ──────────
